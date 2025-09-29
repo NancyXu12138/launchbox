@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Event Planner Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, select, textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        #result { margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 4px; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h1>Event Planner API Test</h1>
+    
+    <form id="eventForm">
+        <div class="form-group">
+            <label>活动主题:</label>
+            <input type="text" id="theme" value="春节庆典" required>
+        </div>
+        
+        <div class="form-group">
+            <label>活动概要:</label>
+            <textarea id="overview" rows="3" required>结合传统春节元素的游戏活动，包含红包、灯笼、舞龙等传统文化元素</textarea>
+        </div>
+        
+        <div class="form-group">
+            <label>活动市场:</label>
+            <input type="text" id="market" value="中国大陆" required>
+        </div>
+        
+        <div class="form-group">
+            <label>业务目标:</label>
+            <select id="businessGoal" required>
+                <option value="revenue">营收增长</option>
+                <option value="retention">用户留存</option>
+                <option value="acquisition">用户获取</option>
+                <option value="engagement">用户活跃</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label>目标玩家:</label>
+            <select id="targetPlayer" required>
+                <option value="all">全体玩家</option>
+                <option value="whale">大R玩家</option>
+                <option value="dolphin">中R玩家</option>
+                <option value="minnow">小R玩家</option>
+                <option value="f2p">免费玩家</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label>目标区域:</label>
+            <input type="text" id="targetRegion" value="亚太地区" required>
+        </div>
+        
+        <button type="submit">生成活动策划案</button>
+    </form>
+    
+    <div id="result"></div>
+    
+    <script>
+        document.getElementById('eventForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = {
+                theme: document.getElementById('theme').value,
+                overview: document.getElementById('overview').value,
+                market: document.getElementById('market').value,
+                businessGoal: document.getElementById('businessGoal').value,
+                businessGoalCustom: '',
+                targetPlayer: document.getElementById('targetPlayer').value,
+                targetPlayerCustom: '',
+                targetRegion: document.getElementById('targetRegion').value
+            };
+            
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = '正在生成活动策划案，请稍候...';
+            
+            try {
+                const response = await fetch('http://localhost:8001/api/generate-event-plan', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    resultDiv.textContent = result.plan;
+                } else {
+                    resultDiv.textContent = `错误: ${result.error}`;
+                }
+            } catch (error) {
+                resultDiv.textContent = `请求失败: ${error.message}`;
+            }
+        });
+    </script>
+</body>
+</html>
