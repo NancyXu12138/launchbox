@@ -725,6 +725,37 @@ export default function ChatPage(): JSX.Element {
   function openEventPlannerDialog(): void {
     setEventPlannerDialogOpen(true);
   }
+  
+  /**
+   * 处理通用动作执行
+   * @param action 选择的动作
+   * @param message 用户消息
+   * @returns 如果成功处理了动作，返回true；否则返回false
+   */
+  function handleActionExecution(action: any, message: string): boolean {
+    if (!action) return false;
+    
+    console.log('处理动作执行:', action.type, message);
+    
+    // 根据不同的动作类型执行不同的操作
+    switch (action.type) {
+      case '翻译':
+        // 对于翻译请求，使用普通的AI响应，让模型自己处理翻译
+        console.log('检测到翻译请求，使用通用AI响应');
+        // 不拦截，继续使用普通AI响应处理
+        return false;
+        
+      case '代码解释':
+        console.log('检测到代码解释请求');
+        // 使用普通AI响应，让模型自行理解并解释代码
+        return false;
+        
+      default:
+        console.log(`未特殊处理的动作类型: ${action.type}`);
+        // 如果没有特别处理的动作，就返回false，让系统继续使用普通AI响应
+        return false;
+    }
+  }
 
   // 处理Event Planner方案选择
   async function handleEventPlannerSelection(message: string): Promise<void> {
@@ -1255,42 +1286,49 @@ export default function ChatPage(): JSX.Element {
       return;
     }
     
-        // 检查是否选中了图像生成技能，或者通过关键词检测到图像生成请求
-        if (selectedSkill === 'image_generation') {
-          await handleImageGeneration(message);
-          return;
-        }
-        
-        // 如果没有选中技能，则通过关键词检测
-        const selectedAction = selectBestAction(message);
-        console.log('🔍 关键词检测结果:', {
-          message: message,
-          selectedAction: selectedAction,
-          actionType: selectedAction?.type,
-          actionName: selectedAction?.name
-        });
-        
-        if (selectedAction && selectedAction.type === '图像生成') {
-          await handleImageGeneration(message);
-          return;
-        }
-        
-        // 检查Event Planner方案选择
-        if (eventPlannerSessionId && (
-          message.includes('选择方案') || 
-          message.includes('重新生成') ||
-          /方案\s*[123]/.test(message)
-        )) {
-          await handleEventPlannerSelection(message);
-          return;
-        }
-        
-        // 检查Event Planner
-        if (selectedAction && selectedAction.type === '活动策划') {
-          console.log('触发Event Planner:', message);
-          await handleEventPlanner(message);
-          return;
-        }
+    // 检查是否选中了图像生成技能，或者通过关键词检测到图像生成请求
+    if (selectedSkill === 'image_generation') {
+      await handleImageGeneration(message);
+      return;
+    }
+    
+    // 如果没有选中技能，则通过关键词检测
+    const selectedAction = selectBestAction(message);
+    console.log('🔍 关键词检测结果:', {
+      message: message,
+      selectedAction: selectedAction,
+      actionType: selectedAction?.type,
+      actionName: selectedAction?.name
+    });
+    
+    // 检查是否符合各种特殊操作的条件
+    if (selectedAction && selectedAction.type === '图像生成') {
+      await handleImageGeneration(message);
+      return;
+    }
+    
+    // 检查Event Planner方案选择
+    if (eventPlannerSessionId && (
+      message.includes('选择方案') || 
+      message.includes('重新生成') ||
+      /方案\s*[123]/.test(message)
+    )) {
+      await handleEventPlannerSelection(message);
+      return;
+    }
+    
+    // 检查Event Planner
+    if (selectedAction && selectedAction.type === '活动策划') {
+      console.log('触发Event Planner:', message);
+      await handleEventPlanner(message);
+      return;
+    }
+    
+    // 检查是否需要执行其他类型的预设动作
+    if (selectedAction && handleActionExecution(selectedAction, message)) {
+      // 如果成功处理了动作，就直接返回
+      return;
+    }
     
     // 检查是否选择了指令模板
     const selectedCommand = selectedCommandId ? commands.find(cmd => cmd.id === selectedCommandId) : null;

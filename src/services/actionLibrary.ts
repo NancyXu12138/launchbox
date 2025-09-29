@@ -3,7 +3,7 @@
 export type ActionItem = {
   id: string;
   name: string;
-  type: 'API调用' | '提示工程' | '执行代码' | '图像生成' | '活动策划';
+  type: 'API调用' | '提示工程' | '执行代码' | '图像生成' | '活动策划' | '翻译' | '代码解释' | '数学计算' | '一般对话';
   description: string;
   pythonCode?: string;
   apiConfig?: {
@@ -358,6 +358,48 @@ export function selectBestAction(userInput: string): ActionItem | null {
     return foundAction || null;
   }
   
+  // 翻译检测 - 增加对翻译请求的支持
+  if (input.includes('翻译') || 
+      input.includes('translate') || 
+      input.includes('中文翻英文') || 
+      input.includes('英文翻中文') ||
+      input.includes('英译中') || 
+      input.includes('中译英') ||
+      (input.startsWith('把') && (
+        input.includes('翻译成') || 
+        input.includes('翻译为') || 
+        input.includes('译为') || 
+        input.includes('译成')
+      ))) {
+    console.log('翻译关键词匹配成功:', input);
+    // 创建一个临时的翻译动作
+    return {
+      id: 'translation',
+      name: '翻译服务',
+      type: '翻译',
+      description: '翻译文本内容到目标语言'
+    };
+  }
+  
+  // 代码解释检测
+  if ((input.includes('解释') && (
+        input.includes('代码') || 
+        input.includes('函数') || 
+        input.includes('程序'))) || 
+      (input.includes('explain') && (
+        input.includes('code') || 
+        input.includes('function'))) || 
+      input.includes('代码是什么意思')) {
+    console.log('代码解释关键词匹配成功:', input);
+    return {
+      id: 'code_explain',
+      name: '代码解释',
+      type: '代码解释',
+      description: '解释代码的功能和实现'
+    };
+  }
+  
+  // 默认返回null，使用普通AI对话处理
   return null;
 }
 
