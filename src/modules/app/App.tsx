@@ -32,20 +32,6 @@ export default function App(): JSX.Element {
         }}
       >
         <Toolbar>
-          <Tooltip title={drawerOpen ? "收起菜单" : "展开菜单"} arrow>
-            <IconButton
-              onClick={() => setDrawerOpen(!drawerOpen)}
-              sx={{
-                mr: 2,
-                color: '#4A90E2',
-                '&:hover': {
-                  bgcolor: 'rgba(74,144,226,0.08)'
-                }
-              }}
-            >
-              {drawerOpen ? <ChevronLeftIcon /> : <MenuIcon />}
-            </IconButton>
-          </Tooltip>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexGrow: 1 }}>
             <Avatar 
               sx={{ 
@@ -312,9 +298,69 @@ export default function App(): JSX.Element {
               </ListItemButton>
             </Tooltip>
           </List>
-          <Divider />
+          <Divider sx={{ my: 1 }} />
+          {/* 收起按钮 */}
+          <Box sx={{ p: drawerOpen ? 2 : 1, mt: 'auto' }}>
+            <Tooltip title={drawerOpen ? "收起菜单" : "展开菜单"} placement="right" arrow>
+              <IconButton
+                onClick={() => setDrawerOpen(!drawerOpen)}
+                sx={{
+                  width: '100%',
+                  borderRadius: 2,
+                  color: '#7F8C8D',
+                  justifyContent: drawerOpen ? 'flex-start' : 'center',
+                  px: drawerOpen ? 2 : 0,
+                  '&:hover': {
+                    bgcolor: 'rgba(127,140,141,0.08)',
+                    color: '#4A90E2'
+                  }
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: drawerOpen ? 40 : 0, justifyContent: 'center', color: 'inherit' }}>
+                  <ChevronLeftIcon />
+                </ListItemIcon>
+                {drawerOpen && (
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    收起菜单
+                  </Typography>
+                )}
+              </IconButton>
+            </Tooltip>
+          </Box>
         </Box>
       </Drawer>
+
+      {/* 收起时的浮动菜单按钮 */}
+      {!drawerOpen && (
+        <Box
+          sx={{
+            position: 'fixed',
+            bottom: 24,
+            left: 24,
+            zIndex: theme => theme.zIndex.drawer + 2
+          }}
+        >
+          <Tooltip title="展开菜单" arrow>
+            <IconButton
+              onClick={() => setDrawerOpen(true)}
+              sx={{
+                width: 56,
+                height: 56,
+                bgcolor: 'white',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                '&:hover': {
+                  bgcolor: 'white',
+                  boxShadow: '0 6px 16px rgba(0,0,0,0.2)',
+                  transform: 'scale(1.05)'
+                },
+                transition: 'all 0.3s ease'
+              }}
+            >
+              <MenuIcon sx={{ fontSize: 28, color: '#4A90E2' }} />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      )}
 
       <Box component="main" sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <Toolbar />
