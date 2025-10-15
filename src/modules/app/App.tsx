@@ -92,6 +92,7 @@ export default function App(): JSX.Element {
           width: drawerOpen ? drawerWidth : drawerCollapsedWidth, 
           flexShrink: 0, 
           transition: 'width 0.3s ease',
+          zIndex: 1200,
           [`& .MuiDrawer-paper`]: { 
             width: drawerOpen ? drawerWidth : drawerCollapsedWidth, 
             boxSizing: 'border-box',
@@ -100,12 +101,16 @@ export default function App(): JSX.Element {
             borderColor: 'divider',
             boxShadow: '2px 0 8px rgba(0,0,0,0.03)',
             transition: 'width 0.3s ease',
-            overflowX: 'hidden'
+            overflowX: 'hidden',
+            position: 'fixed',
+            display: 'flex',
+            flexDirection: 'column',
+            zIndex: 1200
           } 
         }}
       >
         <Toolbar />
-        <Box sx={{ overflow: 'auto', p: drawerOpen ? 2 : 1 }}>
+        <Box sx={{ flex: 1, overflow: 'auto', p: drawerOpen ? 2 : 1, pb: 8 }}>
           <List sx={{ gap: 0.5, display: 'flex', flexDirection: 'column' }}>
             <Tooltip title={drawerOpen ? "" : "聊天"} placement="right" arrow>
               <ListItemButton 
@@ -298,76 +303,62 @@ export default function App(): JSX.Element {
               </ListItemButton>
             </Tooltip>
           </List>
-          <Divider sx={{ my: 1 }} />
-          {/* 收起按钮 */}
-          <Box sx={{ p: drawerOpen ? 2 : 1, mt: 'auto' }}>
-            <Tooltip title={drawerOpen ? "收起菜单" : "展开菜单"} placement="right" arrow>
-              <IconButton
-                onClick={() => setDrawerOpen(!drawerOpen)}
-                sx={{
-                  width: '100%',
-                  borderRadius: 2,
-                  color: '#7F8C8D',
-                  justifyContent: drawerOpen ? 'flex-start' : 'center',
-                  px: drawerOpen ? 2 : 0,
-                  '&:hover': {
-                    bgcolor: 'rgba(127,140,141,0.08)',
-                    color: '#4A90E2'
-                  }
-                }}
-              >
-                <ListItemIcon sx={{ minWidth: drawerOpen ? 40 : 0, justifyContent: 'center', color: 'inherit' }}>
-                  <ChevronLeftIcon />
-                </ListItemIcon>
-                {drawerOpen && (
-                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                    收起菜单
-                  </Typography>
-                )}
-              </IconButton>
-            </Tooltip>
-          </Box>
         </Box>
-      </Drawer>
-
-      {/* 收起时的浮动菜单按钮 */}
-      {!drawerOpen && (
-        <Box
-          sx={{
-            position: 'fixed',
-            bottom: 24,
-            left: 24,
-            zIndex: theme => theme.zIndex.drawer + 2
+        
+        {/* 菜单控制按钮 - 固定在Drawer右下角 */}
+        <Box 
+          sx={{ 
+            position: 'absolute',
+            bottom: 16,
+            right: 16,
+            zIndex: 1300
           }}
         >
-          <Tooltip title="展开菜单" arrow>
+          <Tooltip title={drawerOpen ? "收起菜单" : "展开菜单"} placement="right" arrow>
             <IconButton
-              onClick={() => setDrawerOpen(true)}
+              onClick={() => setDrawerOpen(!drawerOpen)}
               sx={{
-                width: 56,
-                height: 56,
+                color: '#7F8C8D',
                 bgcolor: 'white',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
                 '&:hover': {
-                  bgcolor: 'white',
-                  boxShadow: '0 6px 16px rgba(0,0,0,0.2)',
-                  transform: 'scale(1.05)'
+                  bgcolor: 'rgba(127,140,141,0.08)',
+                  color: '#4A90E2',
+                  boxShadow: '0 4px 8px rgba(0,0,0,0.15)'
                 },
-                transition: 'all 0.3s ease'
+                transition: 'all 0.2s ease'
               }}
             >
-              <MenuIcon sx={{ fontSize: 28, color: '#4A90E2' }} />
+              <MenuIcon />
             </IconButton>
           </Tooltip>
         </Box>
-      )}
+      </Drawer>
 
       <Box component="main" sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <Toolbar />
         {location.pathname === '/' ? (
-          // 聊天页面使用全宽布局
-          <Box sx={{ py: 2, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', width: '100%' }}>
-            <Outlet />
+          // 聊天页面居中显示
+          <Box 
+            sx={{ 
+              py: 2, 
+              flex: 1, 
+              minHeight: 0, 
+              display: 'flex', 
+              flexDirection: 'column', 
+              width: '100%',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            <Box sx={{ 
+              width: '100%',
+              maxWidth: `calc(100vw - ${drawerOpen ? drawerWidth : drawerCollapsedWidth}px - 40px)`,
+              px: 2,
+              transition: 'max-width 0.3s ease'
+            }}>
+              <Outlet />
+            </Box>
           </Box>
         ) : (
           // 其他页面使用Container布局
