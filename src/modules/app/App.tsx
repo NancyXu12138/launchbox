@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { AppBar, Box, Container, Toolbar, Typography, Drawer, List, ListItemButton, ListItemIcon, ListItemText, Divider, IconButton, Avatar } from '@mui/material';
+import { AppBar, Box, Container, Toolbar, Typography, Drawer, List, ListItemButton, ListItemIcon, ListItemText, Divider, IconButton, Avatar, Tooltip } from '@mui/material';
 import ChatIcon from '@mui/icons-material/Chat';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -8,11 +8,15 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
 import LibraryBooksIcon from '@mui/icons-material/LibraryBooks';
 import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
+import MenuIcon from '@mui/icons-material/Menu';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import SettingsDialog from './SettingsDialog';
 
 export default function App(): JSX.Element {
   const location = useLocation();
+  const [drawerOpen, setDrawerOpen] = useState(true);
   const drawerWidth = 250;
+  const drawerCollapsedWidth = 72;
 
   return (
     <Box sx={{ minHeight: '100dvh', display: 'flex', bgcolor: '#F5F7FA' }}>
@@ -28,6 +32,20 @@ export default function App(): JSX.Element {
         }}
       >
         <Toolbar>
+          <Tooltip title={drawerOpen ? "收起菜单" : "展开菜单"} arrow>
+            <IconButton
+              onClick={() => setDrawerOpen(!drawerOpen)}
+              sx={{
+                mr: 2,
+                color: '#4A90E2',
+                '&:hover': {
+                  bgcolor: 'rgba(74,144,226,0.08)'
+                }
+              }}
+            >
+              {drawerOpen ? <ChevronLeftIcon /> : <MenuIcon />}
+            </IconButton>
+          </Tooltip>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexGrow: 1 }}>
             <Avatar 
               sx={{ 
@@ -85,181 +103,214 @@ export default function App(): JSX.Element {
       <Drawer 
         variant="permanent" 
         sx={{ 
-          width: drawerWidth, 
+          width: drawerOpen ? drawerWidth : drawerCollapsedWidth, 
           flexShrink: 0, 
+          transition: 'width 0.3s ease',
           [`& .MuiDrawer-paper`]: { 
-            width: drawerWidth, 
+            width: drawerOpen ? drawerWidth : drawerCollapsedWidth, 
             boxSizing: 'border-box',
             bgcolor: 'white',
             borderRight: '1px solid',
             borderColor: 'divider',
-            boxShadow: '2px 0 8px rgba(0,0,0,0.03)'
+            boxShadow: '2px 0 8px rgba(0,0,0,0.03)',
+            transition: 'width 0.3s ease',
+            overflowX: 'hidden'
           } 
         }}
       >
         <Toolbar />
-        <Box sx={{ overflow: 'auto', p: 2 }}>
+        <Box sx={{ overflow: 'auto', p: drawerOpen ? 2 : 1 }}>
           <List sx={{ gap: 0.5, display: 'flex', flexDirection: 'column' }}>
-            <ListItemButton 
-              component={Link} 
-              to="/" 
-              selected={location.pathname === '/'}
-              sx={{
-                borderRadius: 2,
-                mb: 0.5,
-                '&.Mui-selected': {
-                  bgcolor: 'rgba(74,144,226,0.12)',
-                  color: '#4A90E2',
-                  '&:hover': {
-                    bgcolor: 'rgba(74,144,226,0.18)'
+            <Tooltip title={drawerOpen ? "" : "聊天"} placement="right" arrow>
+              <ListItemButton 
+                component={Link} 
+                to="/" 
+                selected={location.pathname === '/'}
+                sx={{
+                  borderRadius: 2,
+                  mb: 0.5,
+                  justifyContent: drawerOpen ? 'initial' : 'center',
+                  px: drawerOpen ? 2 : 1,
+                  '&.Mui-selected': {
+                    bgcolor: 'rgba(74,144,226,0.12)',
+                    color: '#4A90E2',
+                    '&:hover': {
+                      bgcolor: 'rgba(74,144,226,0.18)'
+                    },
+                    '& .MuiListItemIcon-root': {
+                      color: '#4A90E2'
+                    }
                   },
-                  '& .MuiListItemIcon-root': {
-                    color: '#4A90E2'
-                  }
-                },
-                '&:hover': {
-                  bgcolor: 'rgba(74,144,226,0.08)'
-                }
-              }}
-            >
-              <ListItemIcon sx={{ minWidth: 40 }}>
-                <ChatIcon />
-              </ListItemIcon>
-              <ListItemText 
-                primary="聊天" 
-                primaryTypographyProps={{
-                  fontWeight: location.pathname === '/' ? 600 : 400
-                }}
-              />
-            </ListItemButton>
-            <ListItemButton 
-              component={Link} 
-              to="/acceptance" 
-              selected={location.pathname.startsWith('/acceptance')}
-              sx={{
-                borderRadius: 2,
-                mb: 0.5,
-                '&.Mui-selected': {
-                  bgcolor: 'rgba(80,200,120,0.12)',
-                  color: '#50C878',
                   '&:hover': {
-                    bgcolor: 'rgba(80,200,120,0.18)'
-                  },
-                  '& .MuiListItemIcon-root': {
-                    color: '#50C878'
+                    bgcolor: 'rgba(74,144,226,0.08)'
                   }
-                },
-                '&:hover': {
-                  bgcolor: 'rgba(80,200,120,0.08)'
-                }
-              }}
-            >
-              <ListItemIcon sx={{ minWidth: 40 }}>
-                <AssignmentTurnedInIcon />
-              </ListItemIcon>
-              <ListItemText 
-                primary="验收台" 
-                primaryTypographyProps={{
-                  fontWeight: location.pathname.startsWith('/acceptance') ? 600 : 400
                 }}
-              />
-            </ListItemButton>
-            <ListItemButton 
-              component={Link} 
-              to="/command-center" 
-              selected={location.pathname.startsWith('/command-center')}
-              sx={{
-                borderRadius: 2,
-                mb: 0.5,
-                '&.Mui-selected': {
-                  bgcolor: 'rgba(155,89,182,0.12)',
-                  color: '#9B59B6',
+              >
+                <ListItemIcon sx={{ minWidth: drawerOpen ? 40 : 0, justifyContent: 'center' }}>
+                  <ChatIcon />
+                </ListItemIcon>
+                {drawerOpen && (
+                  <ListItemText 
+                    primary="聊天" 
+                    primaryTypographyProps={{
+                      fontWeight: location.pathname === '/' ? 600 : 400
+                    }}
+                  />
+                )}
+              </ListItemButton>
+            </Tooltip>
+            <Tooltip title={drawerOpen ? "" : "验收台"} placement="right" arrow>
+              <ListItemButton 
+                component={Link} 
+                to="/acceptance" 
+                selected={location.pathname.startsWith('/acceptance')}
+                sx={{
+                  borderRadius: 2,
+                  mb: 0.5,
+                  justifyContent: drawerOpen ? 'initial' : 'center',
+                  px: drawerOpen ? 2 : 1,
+                  '&.Mui-selected': {
+                    bgcolor: 'rgba(80,200,120,0.12)',
+                    color: '#50C878',
+                    '&:hover': {
+                      bgcolor: 'rgba(80,200,120,0.18)'
+                    },
+                    '& .MuiListItemIcon-root': {
+                      color: '#50C878'
+                    }
+                  },
                   '&:hover': {
-                    bgcolor: 'rgba(155,89,182,0.18)'
-                  },
-                  '& .MuiListItemIcon-root': {
-                    color: '#9B59B6'
+                    bgcolor: 'rgba(80,200,120,0.08)'
                   }
-                },
-                '&:hover': {
-                  bgcolor: 'rgba(155,89,182,0.08)'
-                }
-              }}
-            >
-              <ListItemIcon sx={{ minWidth: 40 }}>
-                <DashboardIcon />
-              </ListItemIcon>
-              <ListItemText 
-                primary="指挥中心" 
-                primaryTypographyProps={{
-                  fontWeight: location.pathname.startsWith('/command-center') ? 600 : 400
                 }}
-              />
-            </ListItemButton>
-            <ListItemButton 
-              component={Link} 
-              to="/knowledge-base" 
-              selected={location.pathname.startsWith('/knowledge-base')}
-              sx={{
-                borderRadius: 2,
-                mb: 0.5,
-                '&.Mui-selected': {
-                  bgcolor: 'rgba(26,188,156,0.12)',
-                  color: '#1ABC9C',
+              >
+                <ListItemIcon sx={{ minWidth: drawerOpen ? 40 : 0, justifyContent: 'center' }}>
+                  <AssignmentTurnedInIcon />
+                </ListItemIcon>
+                {drawerOpen && (
+                  <ListItemText 
+                    primary="验收台" 
+                    primaryTypographyProps={{
+                      fontWeight: location.pathname.startsWith('/acceptance') ? 600 : 400
+                    }}
+                  />
+                )}
+              </ListItemButton>
+            </Tooltip>
+            <Tooltip title={drawerOpen ? "" : "指挥中心"} placement="right" arrow>
+              <ListItemButton 
+                component={Link} 
+                to="/command-center" 
+                selected={location.pathname.startsWith('/command-center')}
+                sx={{
+                  borderRadius: 2,
+                  mb: 0.5,
+                  justifyContent: drawerOpen ? 'initial' : 'center',
+                  px: drawerOpen ? 2 : 1,
+                  '&.Mui-selected': {
+                    bgcolor: 'rgba(155,89,182,0.12)',
+                    color: '#9B59B6',
+                    '&:hover': {
+                      bgcolor: 'rgba(155,89,182,0.18)'
+                    },
+                    '& .MuiListItemIcon-root': {
+                      color: '#9B59B6'
+                    }
+                  },
                   '&:hover': {
-                    bgcolor: 'rgba(26,188,156,0.18)'
-                  },
-                  '& .MuiListItemIcon-root': {
-                    color: '#1ABC9C'
+                    bgcolor: 'rgba(155,89,182,0.08)'
                   }
-                },
-                '&:hover': {
-                  bgcolor: 'rgba(26,188,156,0.08)'
-                }
-              }}
-            >
-              <ListItemIcon sx={{ minWidth: 40 }}>
-                <LibraryBooksIcon />
-              </ListItemIcon>
-              <ListItemText 
-                primary="知识" 
-                primaryTypographyProps={{
-                  fontWeight: location.pathname.startsWith('/knowledge-base') ? 600 : 400
                 }}
-              />
-            </ListItemButton>
-            <ListItemButton 
-              component={Link} 
-              to="/actions" 
-              selected={location.pathname.startsWith('/actions')}
-              sx={{
-                borderRadius: 2,
-                mb: 0.5,
-                '&.Mui-selected': {
-                  bgcolor: 'rgba(230,126,34,0.12)',
-                  color: '#E67E22',
+              >
+                <ListItemIcon sx={{ minWidth: drawerOpen ? 40 : 0, justifyContent: 'center' }}>
+                  <DashboardIcon />
+                </ListItemIcon>
+                {drawerOpen && (
+                  <ListItemText 
+                    primary="指挥中心" 
+                    primaryTypographyProps={{
+                      fontWeight: location.pathname.startsWith('/command-center') ? 600 : 400
+                    }}
+                  />
+                )}
+              </ListItemButton>
+            </Tooltip>
+            <Tooltip title={drawerOpen ? "" : "知识"} placement="right" arrow>
+              <ListItemButton 
+                component={Link} 
+                to="/knowledge-base" 
+                selected={location.pathname.startsWith('/knowledge-base')}
+                sx={{
+                  borderRadius: 2,
+                  mb: 0.5,
+                  justifyContent: drawerOpen ? 'initial' : 'center',
+                  px: drawerOpen ? 2 : 1,
+                  '&.Mui-selected': {
+                    bgcolor: 'rgba(26,188,156,0.12)',
+                    color: '#1ABC9C',
+                    '&:hover': {
+                      bgcolor: 'rgba(26,188,156,0.18)'
+                    },
+                    '& .MuiListItemIcon-root': {
+                      color: '#1ABC9C'
+                    }
+                  },
                   '&:hover': {
-                    bgcolor: 'rgba(230,126,34,0.18)'
-                  },
-                  '& .MuiListItemIcon-root': {
-                    color: '#E67E22'
+                    bgcolor: 'rgba(26,188,156,0.08)'
                   }
-                },
-                '&:hover': {
-                  bgcolor: 'rgba(230,126,34,0.08)'
-                }
-              }}
-            >
-              <ListItemIcon sx={{ minWidth: 40 }}>
-                <ListAltIcon />
-              </ListItemIcon>
-              <ListItemText 
-                primary="动作库" 
-                primaryTypographyProps={{
-                  fontWeight: location.pathname.startsWith('/actions') ? 600 : 400
                 }}
-              />
-            </ListItemButton>
+              >
+                <ListItemIcon sx={{ minWidth: drawerOpen ? 40 : 0, justifyContent: 'center' }}>
+                  <LibraryBooksIcon />
+                </ListItemIcon>
+                {drawerOpen && (
+                  <ListItemText 
+                    primary="知识" 
+                    primaryTypographyProps={{
+                      fontWeight: location.pathname.startsWith('/knowledge-base') ? 600 : 400
+                    }}
+                  />
+                )}
+              </ListItemButton>
+            </Tooltip>
+            <Tooltip title={drawerOpen ? "" : "动作库"} placement="right" arrow>
+              <ListItemButton 
+                component={Link} 
+                to="/actions" 
+                selected={location.pathname.startsWith('/actions')}
+                sx={{
+                  borderRadius: 2,
+                  mb: 0.5,
+                  justifyContent: drawerOpen ? 'initial' : 'center',
+                  px: drawerOpen ? 2 : 1,
+                  '&.Mui-selected': {
+                    bgcolor: 'rgba(230,126,34,0.12)',
+                    color: '#E67E22',
+                    '&:hover': {
+                      bgcolor: 'rgba(230,126,34,0.18)'
+                    },
+                    '& .MuiListItemIcon-root': {
+                      color: '#E67E22'
+                    }
+                  },
+                  '&:hover': {
+                    bgcolor: 'rgba(230,126,34,0.08)'
+                  }
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: drawerOpen ? 40 : 0, justifyContent: 'center' }}>
+                  <ListAltIcon />
+                </ListItemIcon>
+                {drawerOpen && (
+                  <ListItemText 
+                    primary="动作库" 
+                    primaryTypographyProps={{
+                      fontWeight: location.pathname.startsWith('/actions') ? 600 : 400
+                    }}
+                  />
+                )}
+              </ListItemButton>
+            </Tooltip>
           </List>
           <Divider />
         </Box>
