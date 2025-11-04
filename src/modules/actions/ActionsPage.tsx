@@ -6,12 +6,12 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CodeIcon from '@mui/icons-material/Code';
 import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
-import { streamOllamaChat, OllamaChatMessage } from '../../services/ollama';
-import { getSettings } from '../../services/settings';
-import { ACTION_LIBRARY, ActionItem as RealActionItem } from '../../services/actionLibrary';
+import { backendApiService } from '../../services/backendApiService';
+import { ACTION_LIBRARY } from '../../../shared/action-library';
+import type { ActionDefinition } from '../../../shared/action-types';
 
-// 使用真实的ActionItem类型
-type ActionItem = RealActionItem;
+// 使用统一的ActionDefinition类型
+type ActionItem = ActionDefinition;
 
 // 直接使用ACTION_LIBRARY，不需要中间变量
 
@@ -142,7 +142,7 @@ function getPromptData(action: ActionItem) {
 
 export default function ActionsPage(): JSX.Element {
   const [query, setQuery] = React.useState('');
-  const [typeFilter, setTypeFilter] = React.useState<'all' | 'API调用' | '提示工程' | '执行代码' | '图像生成'>('all');
+  const [typeFilter, setTypeFilter] = React.useState<'all' | 'api_call' | 'llm_task' | 'code_execution' | 'image_generation'>('all');
   const [viewDialogOpen, setViewDialogOpen] = React.useState(false);
   const [editDialogOpen, setEditDialogOpen] = React.useState(false);
   const [testDialogOpen, setTestDialogOpen] = React.useState(false);
@@ -153,6 +153,16 @@ export default function ActionsPage(): JSX.Element {
   const [testLoading, setTestLoading] = React.useState(false);
   const [convertLoading, setConvertLoading] = React.useState(false);
   const [apiTestParams, setApiTestParams] = React.useState<Record<string, string>>({});
+
+  // 🆕 类型显示映射：英文type → 中文显示
+  const typeDisplayMap: Record<string, string> = {
+    'code_execution': '执行代码',
+    'api_call': 'API调用',
+    'llm_task': '提示工程',
+    'image_generation': '图像生成',
+    'clarify': '信息收集'
+  };
+
   const filtered = React.useMemo(() => {
     const q = query.trim();
     return ACTION_LIBRARY.filter(a => {
@@ -191,20 +201,23 @@ export default function ActionsPage(): JSX.Element {
       const promptData = getPromptData(selectedAction);
       const fullPrompt = `${promptData.prompt}\n\n用户输入：\n${testInput}\n\n请严格按照上述格式要求输出结果：`;
 
-      const messages: OllamaChatMessage[] = [{ role: 'user', content: fullPrompt }];
-      let output = '';
+      const messages = [{ role: 'user' as const, content: fullPrompt }];
+      
+      // 使用后端API进行聊天
+      const response = await backendApiService.getChatCompletion(
+        messages,
+        0.7,  // temperature
+        2000  // max_tokens
+      );
 
-      for await (const chunk of streamOllamaChat(messages)) {
-        output += chunk;
-        setTestOutput(output);
-      }
-
-      if (!output.trim()) {
-        setTestOutput('{"error": "未收到有效响应，请检查Ollama服务是否正常运行"}');
+      if (response.success && response.content) {
+        setTestOutput(response.content);
+      } else {
+        setTestOutput(`{"error": "${response.error || '未收到有效响应'}"}`);
       }
     } catch (error) {
       console.error('测试失败:', error);
-      setTestOutput('{"error": "测试失败，请检查网络连接和Ollama服务状态"}');
+      setTestOutput('{"error": "测试失败，请检查网络连接和后端服务状态"}');
     } finally {
       setTestLoading(false);
     }
@@ -377,10 +390,18 @@ ${action.name === '数学计算器' ? `
         { role: 'user' as const, content: input }
       ];
       
-      let llmResponse = '';
-      for await (const chunk of streamOllamaChat(messages)) {
-        llmResponse += chunk;
+      // 使用后端API获取响应
+      const response = await backendApiService.getChatCompletion(
+        messages,
+        0.7,  // temperature
+        1000  // max_tokens
+      );
+      
+      if (!response.success || !response.content) {
+        return { error: response.error || '无法获取LLM响应' };
       }
+      
+      const llmResponse = response.content;
       
       // 尝试从LLM响应中提取JSON
       const jsonMatch = llmResponse.match(/\{[^{}]*\}/);
@@ -571,10 +592,10 @@ ${action.name === '数学计算器' ? `
             scrollButtons="auto"
           >
             <Tab label="全部" value="all" />
-            <Tab label="API调用" value="API调用" />
-            <Tab label="提示工程" value="提示工程" />
-            <Tab label="执行代码" value="执行代码" />
-            <Tab label="图像生成" value="图像生成" />
+            <Tab label="API调用" value="api_call" />
+            <Tab label="提示工程" value="llm_task" />
+            <Tab label="执行代码" value="code_execution" />
+            <Tab label="图像生成" value="image_generation" />
           </Tabs>
         </Box>
         <TextField
@@ -620,22 +641,22 @@ ${action.name === '数学计算器' ? `
                 </TableCell>
                 <TableCell sx={{ py: 2.5 }}>
                   <Chip 
-                    label={item.type} 
+                    label={typeDisplayMap[item.type] || item.type} 
                     size="small" 
                     variant="filled"
                     sx={{ 
-                      backgroundColor: item.type === 'API调用' 
+                      backgroundColor: item.type === 'api_call' 
                         ? 'rgba(25, 118, 210, 0.08)' 
-                        : item.type === '执行代码'
+                        : item.type === 'code_execution'
                         ? 'rgba(255, 152, 0, 0.08)'
-                        : item.type === '图像生成'
+                        : item.type === 'image_generation'
                         ? 'rgba(76, 175, 80, 0.08)'
                         : 'rgba(156, 39, 176, 0.08)',
-                      color: item.type === 'API调用' 
+                      color: item.type === 'api_call' 
                         ? 'primary.main' 
-                        : item.type === '执行代码'
+                        : item.type === 'code_execution'
                         ? 'orange.main'
-                        : item.type === '图像生成'
+                        : item.type === 'image_generation'
                         ? 'success.main'
                         : 'secondary.main',
                       fontWeight: 500,
@@ -670,7 +691,7 @@ ${action.name === '数学计算器' ? `
                     <Button 
                       size="small" 
                       variant="contained"
-                      startIcon={item.type === '执行代码' ? <PlayArrowIcon /> : <PlayArrowIcon />}
+                      startIcon={<PlayArrowIcon />}
                       sx={{ 
                         minWidth: 80,
                         px: 1
@@ -699,13 +720,13 @@ ${action.name === '数学计算器' ? `
       <Dialog open={testDialogOpen} onClose={() => setTestDialogOpen(false)} maxWidth="lg" fullWidth>
         <DialogTitle>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            {selectedAction?.type === '执行代码' ? <CodeIcon color="primary" /> : <PlayArrowIcon color="primary" />}
-            {selectedAction?.type === 'API调用' ? '测试API' : selectedAction?.type === '执行代码' ? '测试代码执行' : '测试提示词'} - {selectedAction?.name}
+            {selectedAction?.type === 'code_execution' ? <CodeIcon color="primary" /> : <PlayArrowIcon color="primary" />}
+            {selectedAction?.type === 'api_call' ? '测试API' : selectedAction?.type === 'code_execution' ? '测试代码执行' : '测试提示词'} - {selectedAction?.name}
           </Box>
         </DialogTitle>
         <DialogContent>
           <Stack spacing={3} sx={{ mt: 1 }}>
-            {selectedAction?.type === 'API调用' && selectedAction.apiConfig && (
+            {selectedAction?.type === 'api_call' && selectedAction.apiConfig && (
               <>
                 <Box>
                   <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
@@ -742,7 +763,7 @@ ${action.name === '数学计算器' ? `
               </>
             )}
             
-            {selectedAction?.type === '提示工程' && (
+            {selectedAction?.type === 'llm_task' && (
               <Box>
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
                   输入测试数据 (自然语言)
@@ -758,7 +779,7 @@ ${action.name === '数学计算器' ? `
               </Box>
             )}
             
-            {selectedAction?.type === '执行代码' && (
+            {selectedAction?.type === 'code_execution' && (
               <>
                 <Box>
                   <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
@@ -851,10 +872,10 @@ ${action.name === '数学计算器' ? `
               <Button
                 variant="contained"
                 startIcon={testLoading ? <CircularProgress size={16} /> : 
-                  (selectedAction?.type === '执行代码' ? <CodeIcon /> : <PlayArrowIcon />)}
-                onClick={selectedAction?.type === 'API调用' ? runApiTest : 
-                  selectedAction?.type === '执行代码' ? runCodeTest : runPromptTest}
-                disabled={testLoading || (selectedAction?.type === '提示工程' && !testInput.trim()) || (selectedAction?.type === '执行代码' && !jsonParams.trim())}
+                  (selectedAction?.type === 'code_execution' ? <CodeIcon /> : <PlayArrowIcon />)}
+                onClick={selectedAction?.type === 'api_call' ? runApiTest : 
+                  selectedAction?.type === 'code_execution' ? runCodeTest : runPromptTest}
+                disabled={testLoading || (selectedAction?.type === 'llm_task' && !testInput.trim()) || (selectedAction?.type === 'code_execution' && !jsonParams.trim())}
                 sx={{ minWidth: 120 }}
               >
                 {testLoading ? '测试中...' : '运行测试'}
@@ -918,7 +939,7 @@ ${action.name === '数学计算器' ? `
               <Typography variant="subtitle2" color="text.secondary">描述</Typography>
               <Typography variant="body2" sx={{ mt: 0.5 }}>{selectedAction?.description}</Typography>
             </Box>
-            {selectedAction?.type === 'API调用' && selectedAction.apiConfig && (
+            {selectedAction?.type === 'api_call' && selectedAction.apiConfig && (
               <>
                 <Divider />
                 <Box>
@@ -971,7 +992,7 @@ ${action.name === '数学计算器' ? `
                 </Box>
               </>
             )}
-            {selectedAction?.type === '图像生成' && selectedAction.imageGenConfig && (
+            {selectedAction?.type === 'image_generation' && selectedAction.imageConfig && (
               <>
                 <Divider />
                 <Box>
@@ -1003,7 +1024,7 @@ ${action.name === '数学计算器' ? `
                 </Box>
               </>
             )}
-            {selectedAction?.type === '执行代码' && selectedAction.pythonCode && (
+            {selectedAction?.type === 'code_execution' && selectedAction.codeConfig && (
               <>
                 <Divider />
                 <Box>
@@ -1037,7 +1058,7 @@ ${action.name === '数学计算器' ? `
                 </Box>
               </>
             )}
-            {selectedAction?.type === '提示工程' && (() => {
+            {selectedAction?.type === 'llm_task' && (() => {
               const promptData = getPromptData(selectedAction);
               return (
                 <>
@@ -1071,8 +1092,8 @@ ${action.name === '数学计算器' ? `
             })()}
           </Stack>
         </DialogContent>
-        <DialogActions sx={{ justifyContent: (selectedAction?.type === '提示工程' || selectedAction?.type === 'API调用' || selectedAction?.type === '执行代码' || selectedAction?.type === '图像生成') ? 'flex-start' : 'flex-end' }}>
-          {(selectedAction?.type === '提示工程' || selectedAction?.type === 'API调用' || selectedAction?.type === '执行代码' || selectedAction?.type === '图像生成') && (
+        <DialogActions sx={{ justifyContent: (selectedAction?.type === 'llm_task' || selectedAction?.type === 'api_call' || selectedAction?.type === 'code_execution' || selectedAction?.type === 'image_generation') ? 'flex-start' : 'flex-end' }}>
+          {(selectedAction?.type === 'llm_task' || selectedAction?.type === 'api_call' || selectedAction?.type === 'code_execution' || selectedAction?.type === 'image_generation') && (
             <Button 
               variant="outlined"
               startIcon={<EditIcon />}
@@ -1094,7 +1115,7 @@ ${action.name === '数学计算器' ? `
           <Stack spacing={2} sx={{ mt: 1 }}>
             <TextField label="名称" defaultValue={selectedAction?.name} fullWidth />
             <TextField label="描述" defaultValue={selectedAction?.description} fullWidth multiline rows={2} />
-            {selectedAction?.type === 'API调用' && selectedAction.apiConfig && (
+            {selectedAction?.type === 'api_call' && selectedAction.apiConfig && (
               <>
                 <TextField 
                   label="请求方法" 
@@ -1134,7 +1155,7 @@ ${action.name === '数学计算器' ? `
                 )}
               </>
             )}
-            {selectedAction?.type === '执行代码' && (
+            {selectedAction?.type === 'code_execution' && (
               <TextField 
                 label="Python 代码" 
                 multiline 
@@ -1145,7 +1166,7 @@ ${action.name === '数学计算器' ? `
                 helperText="编辑Python代码，确保代码安全且符合预期功能"
               />
             )}
-            {selectedAction?.type === '提示工程' && (() => {
+            {selectedAction?.type === 'llm_task' && (() => {
               const promptData = getPromptData(selectedAction);
               return (
                 <>

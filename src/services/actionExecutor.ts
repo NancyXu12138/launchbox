@@ -1,4 +1,16 @@
-// 动作执行服务
+/**
+ * 前端本地 Action 执行服务（已弃用，仅作为fallback）
+ * 
+ * ⚠️ 注意：此文件已被后端 ActionExecutorService 取代
+ * 当前仅用于：
+ * 1. Todo执行系统的本地计算功能
+ * 2. 作为后端不可用时的降级方案
+ * 
+ * 新功能应该在后端实现：
+ * - backend/services/action_executor_service.py
+ * 
+ * @deprecated 优先使用后端API执行Actions
+ */
 
 export interface ActionExecutionResult {
   success: boolean;

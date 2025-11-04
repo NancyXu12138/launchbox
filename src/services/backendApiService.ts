@@ -68,19 +68,27 @@ export class BackendApiService {
   async getChatCompletion(
     messages: ChatMessage[],
     temperature: number = 0.7,
-    maxTokens: number = 2000
+    maxTokens: number = 2000,
+    model?: string  // 新增：可选的模型参数
   ): Promise<ChatResponse> {
     try {
+      const requestBody: any = {
+        messages,
+        temperature,
+        max_tokens: maxTokens
+      };
+      
+      // 如果指定了模型，则添加到请求中
+      if (model) {
+        requestBody.model = model;
+      }
+      
       const response = await fetch(`${this.baseUrl}/api/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          messages,
-          temperature,
-          max_tokens: maxTokens
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {

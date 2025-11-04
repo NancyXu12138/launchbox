@@ -78,7 +78,8 @@ function getTaskTypeText(taskType: TodoTaskType): string {
 function getProgressIcon(status: SimpleTodoStatus) {
   switch (status) {
     case 'completed':
-      return <CompletedIcon sx={{ color: 'success.main', fontSize: 16 }} />;
+      // 🔥 完成状态的对号图标改为白色（在绿色圆形背景上）
+      return <CompletedIcon sx={{ color: '#ffffff', fontSize: 16 }} />;
     case 'running':
     case 'waiting_user':
       return <ProgressIcon sx={{ color: 'warning.main', fontSize: 16 }} />; // 漏斗图标表示正在进行
@@ -114,12 +115,15 @@ export default function BottomTodoPanel({
   const isInitialDraft = isDraft && !todoList.hasStarted && !hasFailed; // 真正的初始状态：从未开始过且没有失败的draft
   
   // 调试日志
-  console.log('BottomTodoPanel 状态:', {
+  console.log('BottomTodoPanel 渲染状态:', {
     status: todoList.status,
     hasStarted: todoList.hasStarted,
     hasFailed,
     isInitialDraft,
-    items: todoList.items.map(i => ({ id: i.id, text: i.text, status: i.status }))
+    isCompleted,
+    currentStep: todoList.currentStep,
+    totalSteps: todoList.totalSteps,
+    items: todoList.items.map(i => ({ id: i.id, text: i.text.substring(0, 20), status: i.status }))
   });
   
   return (
@@ -129,28 +133,57 @@ export default function BottomTodoPanel({
         position: 'relative',
         backgroundColor: 'background.paper',
         border: '1px solid',
+        // 🔥 加深完成状态的绿色边框，更明显
         borderColor: isRunning ? 'warning.main' : 
-                     isCompleted ? 'success.main' : 
+                     isCompleted ? '#66bb6a' : 
                      isPaused ? 'error.main' : 'primary.main',
         borderRadius: 2,
         overflow: 'hidden'
       }}
     >
       {/* 头部信息 - 紧凑版 */}
-      <Box sx={{ p: 1.5, backgroundColor: 'primary.50' }}>
+      <Box sx={{ 
+        p: 1.5, 
+        // 🔥 表头保持白色背景
+        backgroundColor: 'background.paper',
+        transition: 'background-color 0.3s ease'
+      }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center">
           <Stack direction="row" spacing={1} alignItems="center" flex={1}>
             <Typography variant="subtitle2" fontWeight="bold" noWrap>
-              📋 {todoList.title}
+              {isCompleted ? '✅' : '📋'} {todoList.title}
             </Typography>
             
-            <Chip 
-              label={`${todoList.currentStep}/${todoList.totalSteps}`}
-              size="small"
-              color="primary"
-              variant="outlined"
-              sx={{ fontSize: '0.75rem', height: 20 }}
-            />
+            {/* 🔥 完成状态徽章 */}
+            {isCompleted ? (
+              <Chip 
+                icon={<CompletedIcon sx={{ fontSize: '0.875rem', color: '#2e7d32' }} />}
+                label="已完成"
+                size="small"
+                sx={{ 
+                  fontSize: '0.75rem', 
+                  height: 20,
+                  fontWeight: 600,
+                  // 🔥 对号图标改为深绿色
+                  backgroundColor: '#c8e6c9',
+                  color: '#2e7d32',
+                  border: '1px solid #66bb6a',
+                  animation: 'fadeIn 0.5s ease-in-out',
+                  '@keyframes fadeIn': {
+                    from: { opacity: 0, transform: 'scale(0.8)' },
+                    to: { opacity: 1, transform: 'scale(1)' }
+                  }
+                }}
+              />
+            ) : (
+              <Chip 
+                label={`${todoList.currentStep}/${todoList.totalSteps}`}
+                size="small"
+                color="primary"
+                variant="outlined"
+                sx={{ fontSize: '0.75rem', height: 20 }}
+              />
+            )}
             
           </Stack>
           
@@ -189,8 +222,26 @@ export default function BottomTodoPanel({
             {/* 执行状态：显示完整控制按钮 */}
             {!isInitialDraft && (
               <>
-                {/* 控制按钮 - 根据状态显示不同按钮 */}
-                {!isCompleted && (
+                {/* 🔥 完成状态：显示展开和关闭按钮 */}
+                {isCompleted ? (
+                  <>
+                    <IconButton 
+                      size="small"
+                      onClick={onToggleExpanded}
+                      title={expanded ? "折叠" : "展开"}
+                    >
+                      {expanded ? <CollapseIcon fontSize="small" /> : <ExpandIcon fontSize="small" />}
+                    </IconButton>
+                    
+                    <IconButton 
+                      size="small"
+                      onClick={onClose}
+                      title="移除计划表"
+                    >
+                      <CloseIcon fontSize="small" />
+                    </IconButton>
+                  </>
+                ) : (
                   <>
                     {isRunning ? (
                       <IconButton 
@@ -244,26 +295,26 @@ export default function BottomTodoPanel({
                         <PlayIcon fontSize="small" />
                       </IconButton>
                     )}
+                    
+                    {/* 展开/折叠按钮 - 非完成状态 */}
+                    <IconButton 
+                      size="small"
+                      onClick={onToggleExpanded}
+                      title={expanded ? "折叠" : "展开"}
+                    >
+                      {expanded ? <CollapseIcon fontSize="small" /> : <ExpandIcon fontSize="small" />}
+                    </IconButton>
+                    
+                    {/* 关闭按钮 - 非完成状态 */}
+                    <IconButton 
+                      size="small"
+                      onClick={onClose}
+                      title="移除计划表"
+                    >
+                      <CloseIcon fontSize="small" />
+                    </IconButton>
                   </>
                 )}
-                
-                {/* 展开/折叠按钮 */}
-                <IconButton 
-                  size="small"
-                  onClick={onToggleExpanded}
-                  title={expanded ? "折叠" : "展开"}
-                >
-                  {expanded ? <CollapseIcon fontSize="small" /> : <ExpandIcon fontSize="small" />}
-                </IconButton>
-                
-                {/* 关闭按钮 */}
-                <IconButton 
-                  size="small"
-                  onClick={onClose}
-                  title="移除计划表"
-                >
-                  <CloseIcon fontSize="small" />
-                </IconButton>
               </>
             )}
           </Stack>
@@ -279,7 +330,8 @@ export default function BottomTodoPanel({
               borderRadius: 2,
               backgroundColor: 'grey.200',
               '& .MuiLinearProgress-bar': {
-                backgroundColor: isCompleted ? 'success.main' : 
+                // 🔥 降低完成状态的绿色饱和度
+                backgroundColor: isCompleted ? '#66bb6a' : 
                                 isPaused ? 'error.main' : 'primary.main'
               }
             }} 
@@ -298,10 +350,16 @@ export default function BottomTodoPanel({
                   sx={{ 
                     p: 1, 
                     borderRadius: 1,
-                    backgroundColor: item.status === 'completed' ? 'success.50' : 
+                    // 🔥 完成状态使用白色背景
+                    backgroundColor: item.status === 'completed' ? 'background.paper' : 
                                     item.status === 'running' ? 'warning.50' : 'transparent',
-                    border: item.status === 'running' ? '1px solid' : 'none',
-                    borderColor: 'warning.main'
+                    border: item.status === 'running' ? '1px solid' : 
+                            item.status === 'completed' ? '1px solid' : 'none',
+                    // 🔥 加深完成状态的绿色边框
+                    borderColor: item.status === 'running' ? 'warning.main' : 
+                                 item.status === 'completed' ? '#66bb6a' : 'transparent',
+                    opacity: item.status === 'completed' ? 0.85 : 1,
+                    transition: 'all 0.3s ease-in-out'
                   }}
                 >
                   <Stack direction="row" spacing={1} alignItems="center">
@@ -317,7 +375,9 @@ export default function BottomTodoPanel({
                         minWidth: 20,
                         textAlign: 'center',
                         fontWeight: 'bold',
-                        color: 'primary.main'
+                        // 🔥 完成状态使用绿色，保持一致
+                        color: item.status === 'completed' ? '#66bb6a' : 'primary.main',
+                        textDecoration: item.status === 'completed' ? 'line-through' : 'none'
                       }}
                     >
                       {item.order}
@@ -329,15 +389,16 @@ export default function BottomTodoPanel({
                       sx={{ 
                         flex: 1,
                         textDecoration: item.status === 'completed' ? 'line-through' : 'none',
-                        color: item.status === 'completed' ? 'text.secondary' : 'text.primary'
+                        color: item.status === 'completed' ? 'text.disabled' : 'text.primary',
+                        fontWeight: item.status === 'completed' ? 400 : 500
                       }}
                     >
                       {item.text}
                     </Typography>
                     
-                    {/* 任务类型标签 */}
+                    {/* 任务类型标签 - 🔥 完成状态显示"已完成" */}
                     <Chip 
-                      label={getTaskTypeText(item.taskType)}
+                      label={item.status === 'completed' ? '已完成' : getTaskTypeText(item.taskType)}
                       size="small"
                       variant="filled"
                       sx={{ 
@@ -345,20 +406,27 @@ export default function BottomTodoPanel({
                         height: 18,
                         fontWeight: 500,
                         '& .MuiChip-label': { px: 0.8 },
-                        // 自定义颜色 - 更柔和的色调
-                        ...(item.taskType === 'action' && {
+                        // 完成状态 - 柔和的绿色，加深边框
+                        ...(item.status === 'completed' && {
+                          backgroundColor: '#c8e6c9',
+                          color: '#2e7d32',
+                          border: '1px solid #66bb6a',
+                          opacity: 0.85
+                        }),
+                        // 未完成状态 - 自定义颜色
+                        ...(item.status !== 'completed' && item.taskType === 'action' && {
                           backgroundColor: '#e3f2fd',
                           color: '#1565c0',
                           border: '1px solid #bbdefb',
                           '&:hover': { backgroundColor: '#bbdefb' }
                         }),
-                        ...(item.taskType === 'llm' && {
+                        ...(item.status !== 'completed' && item.taskType === 'llm' && {
                           backgroundColor: '#f3e5f5',
                           color: '#7b1fa2',
                           border: '1px solid #e1bee7',
                           '&:hover': { backgroundColor: '#e1bee7' }
                         }),
-                        ...(item.taskType === 'user_input' && {
+                        ...(item.status !== 'completed' && item.taskType === 'user_input' && {
                           backgroundColor: '#fff3e0',
                           color: '#f57c00',
                           border: '1px solid #ffcc80',

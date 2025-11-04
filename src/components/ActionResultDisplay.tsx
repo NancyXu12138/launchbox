@@ -45,12 +45,16 @@ export default function ActionResultDisplay({
     if (!result.actionUsed) return <CodeIcon sx={{ fontSize: 16 }} />;
     
     switch (result.actionUsed.type) {
-      case '执行代码':
+      case 'code_execution':
         return <CodeIcon sx={{ fontSize: 16, color: 'info.main' }} />;
-      case 'API调用':
+      case 'api_call':
         return <ApiIcon sx={{ fontSize: 16, color: 'warning.main' }} />;
-      case '提示工程':
+      case 'llm_task':
         return <PromptIcon sx={{ fontSize: 16, color: 'secondary.main' }} />;
+      case 'image_generation':
+        return <PromptIcon sx={{ fontSize: 16, color: 'success.main' }} />;
+      case 'clarify':
+        return <PromptIcon sx={{ fontSize: 16, color: 'primary.main' }} />;
       default:
         return <CodeIcon sx={{ fontSize: 16 }} />;
     }

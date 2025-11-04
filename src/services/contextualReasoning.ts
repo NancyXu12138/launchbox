@@ -1,33 +1,135 @@
+/**
+ * 上下文推理服务 (Contextual Reasoning Service)
+ * 
+ * 📋 功能说明：
+ * 在执行多步骤工作流（Todo List）时，智能分析前后步骤的关系。
+ * 帮助LLM理解当前步骤需要用到哪些前置步骤的结果。
+ * 
+ * 🎯 核心能力：
+ * 1. 📊 收集前置步骤的执行结果
+ * 2. 🔍 分析当前步骤需要的信息
+ * 3. ⚠️ 识别缺失的关键信息
+ * 4. 🧠 生成上下文推理分析
+ * 5. ✨ 构建增强的提示词
+ * 
+ * 💡 使用场景：
+ * 
+ * 假设用户要执行以下工作流：
+ * ```
+ * 步骤1: 搜索竞品游戏 → 找到3个游戏
+ * 步骤2: 分析竞品特点 → 需要用到步骤1的结果
+ * 步骤3: 生成对比报告 → 需要用到步骤1和2的结果
+ * ```
+ * 
+ * 当执行步骤2时，contextualReasoning会：
+ * - 收集步骤1的结果："找到3个游戏：A、B、C"
+ * - 分析步骤2需要这些信息
+ * - 构建增强提示词：
+ *   ```
+ *   请分析竞品特点。
+ *   
+ *   前置步骤结果：
+ *   1. 搜索竞品游戏
+ *      执行结果：找到3个游戏：A、B、C
+ *   
+ *   请基于以上信息完成分析。
+ *   ```
+ * 
+ * 🔧 技术实现：
+ * - 简化版推理：不调用额外LLM，基于规则快速推理
+ * - 数据收集：从前置步骤提取关键结果
+ * - 提示词增强：自动整合上下文信息
+ * 
+ * @module contextualReasoning
+ */
+
 import { SimpleTodoItem, SimpleTodoList } from '../components/BottomTodoPanel';
 import { TodoStepResult } from './todoExecutionService';
-import { streamOllamaChat, OllamaChatMessage } from './ollama';
 
-// 上下文信息类型
+/**
+ * 上下文信息类型
+ * 
+ * 包含执行推理后生成的所有上下文数据
+ */
 export interface ContextualInfo {
-  previousResultsCount: number; // 改为数量而不是完整对象，避免循环引用
+  /** 前置步骤的数量 */
+  previousResultsCount: number;
+  
+  /** 当前要执行的步骤 */
   currentStep: SimpleTodoItem;
+  
+  /** 从前置步骤提取的相关数据 */
   relevantData: string[];
+  
+  /** 识别出的缺失信息 */
   missingInfo: string[];
+  
+  /** 推理分析说明 */
   reasoning: string;
+  
+  /** 增强后的提示词（包含上下文） */
   enhancedPrompt: string;
 }
 
-// 推理结果类型
+/**
+ * 推理结果类型
+ * 
+ * 包含是否应该继续执行的判断和上下文信息
+ */
 export interface ReasoningResult {
+  /** 是否应该继续执行当前步骤 */
   shouldProceed: boolean;
+  
+  /** 详细的上下文信息 */
   contextualInfo: ContextualInfo;
+  
+  /** 如果需要等待数据，说明等待什么 */
   waitingForData?: string;
+  
+  /** 推理过程的说明 */
   reasoning: string;
 }
 
 /**
- * 在执行LLM任务前进行上下文推理
- * 分析前面步骤的结果，识别需要传递给LLM的信息
+ * 执行上下文推理（主函数）
+ * 
+ * 在执行LLM任务前，分析前面步骤的结果，识别需要传递给LLM的信息。
+ * 
+ * 工作流程：
+ * 1. 收集前面步骤的执行结果
+ * 2. 分析当前任务需要什么信息（简化版，基于规则）
+ * 3. 识别缺失的信息
+ * 4. 生成推理分析
+ * 5. 构建增强的提示词
+ * 6. 决定是否应该继续执行
+ * 
+ * @param currentStep - 当前要执行的步骤
+ * @param previousResults - 前面所有步骤的执行结果
+ * @param todoList - 完整的Todo List（用于上下文理解）
+ * @returns Promise<ReasoningResult> - 推理结果
+ * 
+ * @example
+ * ```typescript
+ * const result = await performContextualReasoning(
+ *   currentStep,
+ *   previousResults,
+ *   todoList
+ * );
+ * 
+ * if (result.shouldProceed) {
+ *   // 使用增强的提示词执行LLM任务
+ *   const response = await callLLM(result.contextualInfo.enhancedPrompt);
+ * } else {
+ *   // 等待更多信息
+ *   console.log('等待数据:', result.waitingForData);
+ * }
+ * ```
  */
 export async function performContextualReasoning(
   currentStep: SimpleTodoItem,
   previousResults: TodoStepResult[],
-  todoList: SimpleTodoList
+  todoList: SimpleTodoList,
+  userOriginalInput?: string
 ): Promise<ReasoningResult> {
   
   try {
@@ -37,8 +139,8 @@ export async function performContextualReasoning(
     console.log('✅ 收集到数据:', collectedData.length, '个步骤结果');
     
     console.log('🔍 推理步骤2: 分析信息需求...');
-    // 2. 分析当前任务需要什么信息 - 先简化，不调用LLM
-    const requiredInfo: string[] = []; // 暂时跳过LLM分析
+    // 2. 分析当前任务需要什么信息 - 简化版，不调用额外LLM
+    const requiredInfo: string[] = []; // 暂时跳过复杂分析
     console.log('✅ 分析完成，需求信息数量:', requiredInfo.length);
     
     console.log('🔍 推理步骤3: 识别缺失信息...');
@@ -47,15 +149,16 @@ export async function performContextualReasoning(
     console.log('✅ 缺失信息:', missingInfo);
     
     console.log('🔍 推理步骤4: 生成推理分析...');
-    // 4. 生成推理分析 - 简化，不调用LLM
+    // 4. 生成推理分析 - 简化版，基于规则
     const reasoning = `简化推理：当前任务"${currentStep.text}"，已有${collectedData.length}个前置结果，可以直接执行。`;
     console.log('✅ 推理完成:', reasoning);
     
     console.log('🔍 推理步骤5: 构建增强提示词...');
-    // 5. 构建增强的提示词
-    const enhancedPrompt = buildEnhancedPrompt(currentStep, collectedData, reasoning);
+    // 5. 构建增强的提示词（核心功能）
+    const enhancedPrompt = buildEnhancedPrompt(currentStep, collectedData, reasoning, userOriginalInput);
     console.log('✅ 提示词构建完成，长度:', enhancedPrompt.length);
     
+    // 构建上下文信息对象
     const contextualInfo: ContextualInfo = {
       previousResultsCount: previousResults.length,
       currentStep,
@@ -66,8 +169,8 @@ export async function performContextualReasoning(
     };
     
     console.log('🔍 推理步骤6: 决定是否继续执行...');
-    // 6. 决定是否应该继续执行 - 简化判断
-    const shouldProceed = true; // 暂时总是继续
+    // 6. 决定是否应该继续执行 - 简化版，总是继续
+    const shouldProceed = true;
     console.log('✅ 决定结果: shouldProceed =', shouldProceed);
     
     return {
@@ -78,9 +181,9 @@ export async function performContextualReasoning(
     };
     
   } catch (error) {
-    console.error('上下文推理失败:', error);
+    console.error('❌ 上下文推理失败:', error);
     
-    // 如果推理失败，使用基础的上下文信息
+    // 如果推理失败，使用基础的上下文信息（降级方案）
     return {
       shouldProceed: true,
       contextualInfo: {
@@ -98,6 +201,11 @@ export async function performContextualReasoning(
 
 /**
  * 收集前面步骤的执行数据
+ * 
+ * 从前置步骤的执行结果中提取关键信息，生成摘要。
+ * 
+ * @param previousResults - 前置步骤的执行结果数组
+ * @returns 结构化的数据摘要数组
  */
 function collectPreviousStepData(previousResults: TodoStepResult[]): Array<{
   stepText: string;
@@ -115,15 +223,19 @@ function collectPreviousStepData(previousResults: TodoStepResult[]): Array<{
       if (execResult?.result) {
         // 根据执行结果类型生成摘要
         if (execResult.result.isLLMTask) {
+          // LLM任务结果
           summary = `LLM分析结果：${execResult.result.response?.substring(0, 200)}...`;
           dataType = 'llm_analysis';
         } else if (execResult.result.response) {
+          // Action执行结果
           summary = `执行结果：${execResult.result.response?.substring(0, 200)}...`;
           dataType = 'action_result';
         } else if (execResult.result.data) {
+          // 结构化数据结果
           summary = `数据结果：${JSON.stringify(execResult.result.data).substring(0, 200)}...`;
           dataType = 'structured_data';
         } else {
+          // 其他类型
           summary = `任务完成：${result.stepText}`;
           dataType = 'completion';
         }
@@ -142,63 +254,13 @@ function collectPreviousStepData(previousResults: TodoStepResult[]): Array<{
 }
 
 /**
- * 分析当前任务需要什么信息
- */
-async function analyzeRequiredInformation(
-  currentStep: SimpleTodoItem,
-  todoList: SimpleTodoList
-): Promise<string[]> {
-  
-  try {
-    const prompt = `
-分析以下任务需要什么信息才能正确执行：
-
-当前任务：${currentStep.text}
-
-完整任务列表上下文：
-${todoList.items.map((item, index) => 
-  `${index + 1}. ${item.text} ${item.id === currentStep.id ? '← 当前任务' : ''}`
-).join('\n')}
-
-请分析当前任务可能需要以下类型的信息：
-1. 前面步骤的执行结果
-2. 用户输入的数据
-3. 计算结果或分析数据
-4. 文件内容或数据源
-5. 配置信息或参数
-
-请列出具体需要的信息类型，每行一个，格式：
-- 信息类型：具体描述
-
-只列出明确需要的信息，不要猜测。
-`;
-
-    const messages: OllamaChatMessage[] = [
-      { role: 'user', content: prompt }
-    ];
-
-    let response = '';
-    const stream = streamOllamaChat(messages);
-    for await (const chunk of stream) {
-      response += chunk;
-    }
-
-    // 解析返回的信息需求
-    const lines = response.split('\n')
-      .filter(line => line.trim().startsWith('-'))
-      .map(line => line.replace(/^-\s*/, '').trim())
-      .filter(line => line.length > 0);
-
-    return lines;
-    
-  } catch (error) {
-    console.error('分析信息需求失败:', error);
-    return [];
-  }
-}
-
-/**
  * 识别缺失的信息
+ * 
+ * 对比需求信息和已有数据，找出缺失的部分。
+ * 
+ * @param requiredInfo - 需要的信息列表
+ * @param availableData - 已有的数据
+ * @returns 缺失的信息列表
  */
 function identifyMissingInformation(
   requiredInfo: string[],
@@ -229,6 +291,11 @@ function identifyMissingInformation(
 
 /**
  * 从需求描述中推断数据类型
+ * 
+ * 基于关键词匹配推断数据类型。
+ * 
+ * @param requirement - 需求描述
+ * @returns 推断的数据类型
  */
 function getDataTypeFromRequirement(requirement: string): string {
   const req = requirement.toLowerCase();
@@ -242,125 +309,89 @@ function getDataTypeFromRequirement(requirement: string): string {
 }
 
 /**
- * 生成推理分析
- */
-async function generateReasoning(
-  currentStep: SimpleTodoItem,
-  collectedData: Array<{ stepText: string; summary: string; dataType: string }>,
-  requiredInfo: string[],
-  missingInfo: string[]
-): Promise<string> {
-  
-  try {
-    const prompt = `
-请分析以下任务执行情况并生成推理：
-
-当前任务：${currentStep.text}
-
-已有的执行结果：
-${collectedData.map((data, index) => 
-  `${index + 1}. ${data.stepText}\n   结果：${data.summary}`
-).join('\n\n')}
-
-任务需要的信息：
-${requiredInfo.map(info => `- ${info}`).join('\n')}
-
-缺失的信息：
-${missingInfo.map(info => `- ${info}`).join('\n')}
-
-请分析：
-1. 当前任务是否有足够的信息来执行
-2. 已有的执行结果中哪些与当前任务相关
-3. 如何最好地利用现有信息
-4. 是否需要等待更多信息
-
-请提供简洁的推理分析（100-200字）：
-`;
-
-    const messages: OllamaChatMessage[] = [
-      { role: 'user', content: prompt }
-    ];
-
-    let response = '';
-    const stream = streamOllamaChat(messages);
-    for await (const chunk of stream) {
-      response += chunk;
-    }
-
-    return response.trim();
-    
-  } catch (error) {
-    console.error('生成推理失败:', error);
-    return `推理分析：当前任务"${currentStep.text}"准备执行。已收集${collectedData.length}个前置步骤的结果。${missingInfo.length > 0 ? `缺失信息：${missingInfo.join(', ')}` : '信息充足，可以执行。'}`;
-  }
-}
-
-/**
- * 构建增强的提示词
+ * 构建增强的提示词（核心功能）
+ * 
+ * 将当前任务、前置步骤结果、推理分析整合成一个完整的提示词。
+ * 这个提示词会传递给LLM，帮助它更好地理解上下文。
+ * 
+ * 生成的提示词格式：
+ * ```
+ * 请完成以下任务：[当前任务]
+ * 
+ * 前置步骤的执行结果：
+ * 1. [步骤1]
+ *    执行结果：[结果摘要]
+ *    详细内容：[完整结果]
+ * 
+ * 2. [步骤2]
+ *    执行结果：[结果摘要]
+ *    详细内容：[完整结果]
+ * 
+ * 执行分析：[推理说明]
+ * 
+ * 要求：
+ * - 充分利用上述前置步骤的执行结果
+ * - 确保任务执行的连贯性和逻辑性
+ * - ...
+ * ```
+ * 
+ * @param currentStep - 当前步骤
+ * @param collectedData - 收集的前置数据
+ * @param reasoning - 推理分析
+ * @returns 增强后的提示词
  */
 function buildEnhancedPrompt(
   currentStep: SimpleTodoItem,
   collectedData: Array<{ stepText: string; result: any; summary: string }>,
-  reasoning: string
+  reasoning: string,
+  userOriginalInput?: string
 ): string {
   
-  let prompt = `请完成以下任务：${currentStep.text}\n\n`;
+  let prompt = `你是一个智能助手，正在执行多步骤任务的其中一步。\n\n`;
   
+  if (userOriginalInput) {
+    prompt += `【用户的原始请求】\n${userOriginalInput}\n\n`;
+  }
+  
+  prompt += `【当前任务】\n${currentStep.text}\n\n`;
+  
+  // 如果有前置步骤的结果，添加到提示词中
   if (collectedData.length > 0) {
-    prompt += `前置步骤的执行结果：\n`;
+    prompt += `【前置步骤的执行结果】\n`;
     collectedData.forEach((data, index) => {
-      prompt += `${index + 1}. ${data.stepText}\n`;
-      prompt += `   执行结果：${data.summary}\n`;
+      prompt += `步骤${index + 1}: ${data.stepText}\n`;
       
-      // 如果有详细的结果数据，也包含进来
-      if (data.result && data.result.response) {
-        prompt += `   详细内容：${data.result.response.substring(0, 500)}...\n`;
+      if (data.result) {
+        if (typeof data.result === 'object') {
+          if ('result' in data.result) {
+            prompt += `结果: ${data.result.result}\n`;
+          } else if ('response' in data.result) {
+            prompt += `结果: ${data.result.response}\n`;
+          } else if ('answer' in data.result) {
+            prompt += `结果: ${data.result.answer}\n`;
+          } else if ('data' in data.result) {
+            prompt += `结果: ${JSON.stringify(data.result.data)}\n`;
+          } else {
+            prompt += `结果: ${data.summary}\n`;
+          }
+        } else {
+          prompt += `结果: ${data.result}\n`;
+        }
       }
       prompt += `\n`;
     });
   }
   
-  prompt += `执行分析：${reasoning}\n\n`;
+  prompt += `【重要提示】
+1. 如果前置步骤提供了数据，请务必使用这些真实数据
+2. 如果用户原始请求包含了所需信息，请从中提取
+3. 不要编造或假设数据，只使用已提供的真实信息
+4. 如果是生成报告/总结，请基于前置步骤的真实结果
+5. 【格式要求】使用纯文本和自然语言回答，不要使用LaTeX格式（如\\times、\\frac、\\approx等）
+6. 【格式要求】数学符号使用：乘号用×或*，除号用÷或/，约等于用≈，分数直接写如"1232÷890"
+7. 【格式要求】如果提取数学表达式，保持原样，不要修改运算符\n\n`;
   
-  prompt += `要求：
-- 充分利用上述前置步骤的执行结果
-- 确保任务执行的连贯性和逻辑性
-- 提供详细和有用的回答
-- 如果前置结果中有相关数据，请明确引用和使用
-- 保持回答的专业性和准确性`;
+  prompt += `请完成当前任务：`;
 
   return prompt;
-}
-
-/**
- * 判断是否可以在缺失信息的情况下继续执行
- */
-async function canProceedWithoutMissingInfo(
-  missingInfo: string[],
-  reasoning: string
-): Promise<boolean> {
-  
-  // 如果缺失的信息都是可选的或可以推断的，则可以继续
-  const optionalKeywords = ['可选', '建议', '最好', '推荐', '如果有'];
-  const criticalKeywords = ['必须', '需要', '要求', '依赖'];
-  
-  const hasCriticalMissing = missingInfo.some(info => 
-    criticalKeywords.some(keyword => info.includes(keyword))
-  );
-  
-  const hasOptionalMissing = missingInfo.some(info => 
-    optionalKeywords.some(keyword => info.includes(keyword))
-  );
-  
-  // 如果只是缺失可选信息，可以继续
-  if (hasOptionalMissing && !hasCriticalMissing) {
-    return true;
-  }
-  
-  // 如果推理中提到可以继续，也可以执行
-  if (reasoning.includes('可以执行') || reasoning.includes('足够') || reasoning.includes('继续')) {
-    return true;
-  }
-  
-  return missingInfo.length <= 1; // 如果只缺失一个信息项，也可以尝试执行
 }

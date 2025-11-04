@@ -1,6 +1,29 @@
 /**
- * Action执行服务
- * 调用后端API执行各种Action
+ * 前端 Action 执行服务（核心服务）
+ * 
+ * 职责：
+ * 1. 统一调用后端API执行各种Actions
+ * 2. 处理Action执行结果
+ * 3. 提供Event Planner的状态管理
+ * 
+ * 支持的Action类型：
+ * - code_execution: 代码执行（计算器、文本处理等）
+ * - api_call: API调用（搜索、数据获取）
+ * - llm_task: LLM任务（情感分析、游戏分类）
+ * - image_generation: 图像生成
+ * - clarify: 信息收集（Event Planner表单）
+ * 
+ * 后端对应：backend/services/action_executor_service.py
+ * 
+ * 使用示例：
+ * ```typescript
+ * const result = await actionExecutorService.executeAction({
+ *   action_id: 'calculator',
+ *   action_name: '数学计算器',
+ *   action_type: 'code_execution',
+ *   parameters: { expression: '2+2' }
+ * });
+ * ```
  */
 
 import { backendApiService } from './backendApiService';

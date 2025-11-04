@@ -39,6 +39,7 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     temperature: float = 0.7
     max_tokens: int = 2000
+    model: str = None  # 新增：支持指定模型
 
 class ImageGenerationRequest(BaseModel):
     prompt: str
@@ -102,10 +103,13 @@ async def chat_completion(request: ChatRequest):
         )
         
         # Get completion from service
+        # 支持自定义模型，如果未指定则使用默认模型
+        model = request.model if request.model else None
         result = await service.get_chat_completion(
             messages=formatted_messages,
             temperature=request.temperature,
-            max_tokens=request.max_tokens
+            max_tokens=request.max_tokens,
+            model=model
         )
         
         if result["success"]:

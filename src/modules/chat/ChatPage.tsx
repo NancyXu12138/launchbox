@@ -1,19 +1,21 @@
 import React from 'react';
-import { Box, Paper, Stack, TextField, IconButton, Typography, Avatar, Button, List, ListItemButton, ListItemText, Menu, MenuItem, Dialog, DialogTitle, DialogContent, DialogActions, Collapse, Divider, Chip, Alert, FormControl, InputLabel, Select } from '@mui/material';
+import { Box, Paper, Stack, TextField, IconButton, Typography, Avatar, Button, List, ListItemButton, ListItemText, Menu, MenuItem, Dialog, DialogTitle, DialogContent, DialogActions, Collapse, Divider, Chip, Alert, FormControl, InputLabel, Select, CircularProgress } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import ZoomInIcon from '@mui/icons-material/ZoomIn';
 import SaveIcon from '@mui/icons-material/Save';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { streamOllamaChat, OllamaChatMessage } from '../../services/ollama';
-import { getSettings, getAppSettings } from '../../services/settings';
+import { getAppSettings } from '../../services/settings';
 import { backendApiService, ChatMessage as BackendChatMessage } from '../../services/backendApiService';
 import { gptImageService, ImageGenerationResult } from '../../services/gptImageService';
 import { actionExecutorService, ActionExecutionResult } from '../../services/actionExecutorService';
-import { selectBestAction } from '../../services/actionLibrary';
+import { selectBestAction, ACTION_LIBRARY } from '../../../shared/action-library';
+import { classifyIntent, quickIntentCheck, IntentResult } from '../../services/intentClassifier';
+import { extractParameters, quickExtractParameters } from '../../services/parameterExtractor';
+import { selectModelForTask } from '../../services/modelConfig';
 import { splitThinking } from '../../utils/thinking';
 import { searchKnowledgeBase, formatSearchResultsAsContext, getKnowledgeSources } from '../../services/knowledgeBase';
 import { getCommands, CommandItem } from '../../services/commandService';
-import BottomTodoPanel, { SimpleTodoList } from '../../components/BottomTodoPanel';
+import BottomTodoPanel, { SimpleTodoList, SimpleTodoItem } from '../../components/BottomTodoPanel';
 import ActionResultDisplay from '../../components/ActionResultDisplay';
 import { 
   generateSimpleTodoWithLLM, 
@@ -42,6 +44,8 @@ type Message = {
   text: string;
   createdAt: number;
   thinking?: string;
+  isThinking?: boolean; // 🆕 正在思考中的标记
+  isSystemMessage?: boolean; // 🔥 系统消息标记（UI提示，不发送给LLM）
   executionResults?: TodoStepResult[]; // 附加的执行结果
   imageBase64?: string; // 生成的图像数据
   isImageGeneration?: boolean; // 标记是否为图像生成消息
@@ -278,16 +282,6 @@ export default function ChatPage(): JSX.Element {
   const [commandDialogOpen, setCommandDialogOpen] = React.useState(false);
   const [commandSearchText, setCommandSearchText] = React.useState('');
   
-  // 技能相关状态
-  const [skillDialogOpen, setSkillDialogOpen] = React.useState<boolean>(false);
-  const [selectedSkill, setSelectedSkill] = React.useState<string | null>(null);
-  
-  // 技能列表定义
-    const skills = [
-    { id: 'image_generation', name: '图像生成', description: '生成高质量图像' },
-    { id: 'event_planning', name: 'Event Planner', description: '生成专业的游戏活动策划案' },
-  ];
-  
   // Event Planner相关状态
   const [eventPlannerDialogOpen, setEventPlannerDialogOpen] = React.useState<boolean>(false);
   const [eventPlannerForm, setEventPlannerForm] = React.useState({
@@ -516,6 +510,27 @@ export default function ChatPage(): JSX.Element {
         return { ...prev, [activeId]: todo };
       });
     }
+  }
+  
+  // 🆕 使用函数式更新TodoItem状态（确保基于最新状态）
+  function updateCurrentTodoItemStatus(itemId: string, newStatus: SimpleTodoItem['status']): void {
+    if (!activeId) return;
+    
+    setConversationTodos(prev => {
+      const currentTodo = prev[activeId];
+      if (!currentTodo) return prev;
+      
+      const updatedTodo = updateTodoItemStatus(currentTodo, itemId, newStatus);
+      
+      console.log('🔄 函数式更新TodoItem状态:', {
+        itemId,
+        newStatus,
+        before: currentTodo.items.map(i => ({ id: i.id, status: i.status })),
+        after: updatedTodo.items.map(i => ({ id: i.id, status: i.status }))
+      });
+      
+      return { ...prev, [activeId]: updatedTodo };
+    });
   }
 
   function pushMessage(partial: Omit<Message, 'id' | 'createdAt'>): void {
@@ -1040,18 +1055,32 @@ export default function ChatPage(): JSX.Element {
     }
   }
 
-  async function handleAIResponse(): Promise<void> {
+  /**
+   * 处理AI响应
+   * @param overridePrompt 可选的覆盖提示词，用于Closing the Loop场景
+   * @param reuseAssistantId 可选的已存在的assistantId，用于复用loading消息
+   * @param currentUserMessage 可选的当前用户消息，避免从状态中读取（解决异步问题）
+   */
+  async function handleAIResponse(overridePrompt?: string, reuseAssistantId?: string, currentUserMessage?: string): Promise<void> {
     if (!activeId) {
       const firstMessage = getActive()?.messages?.[0]?.text;
       handleNewConversation(firstMessage?.slice(0, 12) || '新对话');
     }
 
     const currentMessages = getActive()?.messages ?? [];
-    const lastUserMessage = currentMessages.filter(m => m.role === 'user').pop()?.text || '';
+    // 🔥 修复：优先使用传入的currentUserMessage，避免从异步状态中读取
+    const lastUserMessage = overridePrompt || currentUserMessage || currentMessages.filter(m => m.role === 'user').pop()?.text || '';
     
-    // RAG检索（如果启用）
+    // 调试日志
+    if (currentUserMessage) {
+      console.log('✅ 使用传入的currentUserMessage:', currentUserMessage.substring(0, 50));
+    } else if (!overridePrompt) {
+      console.log('⚠️ 从历史消息中获取lastUserMessage:', lastUserMessage.substring(0, 50));
+    }
+    
+    // RAG检索（如果启用，且没有overridePrompt）
     let contextualPrompt = lastUserMessage;
-    if (ragSettings.enabled) {
+    if (!overridePrompt && ragSettings.enabled) {
       try {
         const knowledgeSources = getKnowledgeSources();
         if (knowledgeSources.some(source => source.status === 'active')) {
@@ -1059,92 +1088,227 @@ export default function ChatPage(): JSX.Element {
           if (searchResults.length > 0) {
             const context = formatSearchResultsAsContext(searchResults);
             contextualPrompt = `${context}\n\n${lastUserMessage}`;
+            console.log('✅ RAG上下文已添加');
           }
         }
       } catch (error) {
         console.error('RAG检索失败:', error);
       }
+    } else if (overridePrompt) {
+      // 使用override prompt（Closing the Loop场景）
+      contextualPrompt = overridePrompt;
     }
 
     const appSettings = getAppSettings();
-    const assistantId = generateId();
+    const assistantId = reuseAssistantId || generateId();  // 复用或创建新ID
     const startTs = Date.now();
     
-    // 创建助手消息
+    // 只有在没有复用ID时才创建新消息
+    if (!reuseAssistantId) {
+      // 创建助手消息（带loading状态）
     upsertConversation(prev => prev.map(c => c.id === activeId ? {
       ...c,
-      messages: [...c.messages, { id: assistantId, role: 'agent', text: '', createdAt: startTs }],
+        messages: [...c.messages, { 
+          id: assistantId, 
+          role: 'agent', 
+          text: '', 
+          createdAt: startTs,
+          isThinking: true
+        }],
       updatedAt: startTs
     } : c));
+    } else {
+      // 复用现有消息，只需要确保isThinking状态正确
+      upsertConversation(prev => prev.map(c => c.id === activeId ? {
+        ...c,
+        messages: c.messages.map(m => m.id === assistantId ? {
+          ...m,
+          text: '',  // 清空之前的"正在执行..."文本
+          isThinking: true
+        } : m),
+        updatedAt: startTs
+      } : c));
+    }
 
     try {
-      if (appSettings.useBackendApi) {
-        // 使用后端OpenAI API
+      // 使用后端OpenAI API（统一路径）
         const trimmedMessages = trimMessagesForMemory(currentMessages);
-        const backendMessages: BackendChatMessage[] = trimmedMessages.map(m => ({
-          role: m.role === 'agent' ? 'assistant' : 'user',
-          content: m.text
-        }));
         
-        // 添加当前用户消息
-        backendMessages.push({
+      // 🔥 关键修复：过滤系统消息（执行日志/UI提示），只保留真实对话
+      const conversationMessages = trimmedMessages.filter(m => {
+        // 过滤掉系统消息
+        if (m.isSystemMessage) return false;
+        
+        // 过滤掉包含系统提示符号的消息（额外保护）
+        const systemPatterns = ['📋', '🚀', '⏸️', '任务执行计划', '开始执行任务', '任务执行已暂停'];
+        if (systemPatterns.some(pattern => m.text.includes(pattern))) return false;
+        
+        // 保留真实的对话内容
+        return true;
+      });
+      
+      // 🆕 Token预算管理：限制最近N轮对话（建议6-10轮，即12-20条消息）
+      const MAX_CONTEXT_MESSAGES = 12; // 6轮对话
+      const contextMessages = conversationMessages.slice(-MAX_CONTEXT_MESSAGES);
+      
+      console.log('📝 上下文管理:', {
+        原始消息数: currentMessages.length,
+        过滤后消息数: conversationMessages.length,
+        发送消息数: contextMessages.length,
+        已过滤系统消息: currentMessages.length - conversationMessages.length
+      });
+      
+      // 🆕 修复：处理overridePrompt场景（Closing the Loop）
+      let backendMessages: BackendChatMessage[];
+      
+      if (overridePrompt) {
+        // Closing the Loop场景：只发送增强提示词，不包含历史
+        // 这样LLM可以专注于基于工具结果生成解释
+        backendMessages = [{
           role: 'user',
           content: contextualPrompt
+        }];
+        console.log('🔄 Closing the Loop模式，不包含历史');
+      } else {
+        // 🔥 强化System Prompt：使用MUST规则，明确职责分离
+        const systemMessage: BackendChatMessage = {
+          role: 'system',
+          content: `You are a professional AI assistant. Follow these rules STRICTLY:
+
+【MUST FOLLOW】
+1. The user's LAST message is THE ONLY question you need to answer
+2. Previous conversation is ONLY for reference when explicitly needed
+3. DO NOT mix topics from history into unrelated new questions
+
+【Context Usage Rules】
+✅ MUST use history when:
+- User explicitly refers: "the previous", "that result", "continue", "based on above"
+- User uses pronouns: "it", "this", "that" (need to find referent in history)
+- User is clearly continuing the same topic
+
+❌ MUST NOT use history when:
+- Completely new independent question (e.g., "translate X", "calculate Y", "what is Z")
+- Topic completely switches (from game discussion to weather)
+- No reference to previous content
+
+【Critical Examples】
+BAD ❌:
+User history: discussed math calculation
+User now: translate "hello" to Spanish
+Wrong answer: Based on the calculation result above...
+Correct answer: Hola
+
+BAD ❌:
+User history: asked about Godot engine
+User now: search for current events
+Wrong answer: Godot is a game engine, regarding current events...
+Correct answer: I cannot search real-time information...
+
+【Output Requirements】
+- Direct, accurate, concise
+- NEVER fabricate information
+- If uncertain, say "I'm not sure" instead of guessing
+- Keep your answer focused ONLY on the latest user question
+
+Now, answer ONLY the user's latest question below.`
+        };
+        
+        // 构建消息列表：system + 历史 + 当前
+        backendMessages = [
+          systemMessage,
+          ...contextMessages.map(m => ({
+            role: m.role === 'agent' ? 'assistant' as const : 'user' as const,
+            content: m.text
+          })),
+          {
+            role: 'user',
+            content: contextualPrompt
+          }
+        ];
+        
+        console.log('💬 发送给LLM的消息:', {
+          '真实对话轮数': Math.floor(contextMessages.length / 2),
+          '发送消息数': contextMessages.length,
+          '当前问题': lastUserMessage.substring(0, 50) + (lastUserMessage.length > 50 ? '...' : ''),
+          '使用RAG': contextualPrompt !== lastUserMessage,
+          '总消息数（含system）': backendMessages.length,
+          '强化System Prompt': true
         });
+      }
 
         // 使用流式API
+      let streamBuffer = '';  // 节流缓冲区
+      let fullContent = '';   // 完整内容累积器（解决竞态条件）
+        let lastUpdateTime = 0;
+        const UPDATE_THROTTLE = 50; // 50ms更新一次，减少渲染压力
+        
         await backendApiService.startStreamingChat(
           backendMessages,
           (chunk: string) => {
             // 处理流式响应块
+            streamBuffer += chunk;
+          fullContent += chunk;  // 累积完整内容
             const now = Date.now();
+            
+          // 节流：避免过于频繁的更新导致无限循环
+            if (now - lastUpdateTime < UPDATE_THROTTLE) {
+              return; // 跳过本次更新
+            }
+            
+            lastUpdateTime = now;
+          
+          // 直接使用fullContent，避免依赖React状态
+          const { visible, thinking } = splitThinking(fullContent);
+          
             upsertConversation(prev => prev.map(c => {
               if (c.id !== activeId) return c;
               const nextMessages = c.messages.map(m => {
                 if (m.id !== assistantId) return m;
-                const merged = m.text + chunk;
-                const { visible, thinking } = splitThinking(merged);
-                return { ...m, text: visible, thinking };
+              
+              return { 
+                ...m, 
+                text: visible, 
+                thinking,
+                isThinking: false
+              };
               });
+              streamBuffer = ''; // 清空缓冲区
               return { ...c, messages: nextMessages, updatedAt: now };
             }));
           },
           () => {
-            // 完成回调
-            console.log('Backend streaming completed');
-          },
-          (error: string) => {
-            // 错误回调
-            console.error('Backend streaming error:', error);
-            pushMessage({ role: 'agent', text: `❌ 后端API调用失败: ${error}` });
-          }
-        );
-      } else {
-        // 使用原来的Ollama
-        const trimmedMessages = trimMessagesForMemory(currentMessages);
-        const history: OllamaChatMessage[] = trimmedMessages.map(m => ({
-          role: m.role === 'agent' ? 'assistant' : 'user',
-          content: m.text
-        }));
-
-        for await (const chunk of streamOllamaChat([...history, { role: 'user', content: contextualPrompt }])) {
-          const now = Date.now();
+          // 完成回调 - 使用fullContent确保所有内容都显示
+          const { visible, thinking } = splitThinking(fullContent);
+          
+          // 最终更新：确保所有内容显示，清除loading状态
           upsertConversation(prev => prev.map(c => {
             if (c.id !== activeId) return c;
             const nextMessages = c.messages.map(m => {
               if (m.id !== assistantId) return m;
-              const merged = m.text + chunk;
-              const { visible, thinking } = splitThinking(merged);
-              return { ...m, text: visible, thinking };
+              
+              return { 
+                ...m, 
+                text: visible, 
+                thinking,
+                isThinking: false
+              };
             });
-            return { ...c, messages: nextMessages, updatedAt: now };
+            return { ...c, messages: nextMessages, updatedAt: Date.now() };
           }));
+          
+          // 清空所有变量
+          streamBuffer = '';
+          fullContent = '';
+        },
+        (error: string) => {
+          // 错误回调
+          console.error('❌ Backend streaming error:', error);
+          pushMessage({ role: 'agent', text: `❌ 后端API调用失败: ${error}` });
         }
-      }
+      );
     } catch (e) {
       const err = e as Error;
-      const serviceName = appSettings.useBackendApi ? 'Backend API' : 'Ollama';
-      pushMessage({ role: 'agent', text: `❌ 调用 ${serviceName} 失败: ${err.message}` });
+      pushMessage({ role: 'agent', text: `❌ 调用后端API失败: ${err.message}` });
     }
   }
 
@@ -1286,60 +1450,266 @@ export default function ChatPage(): JSX.Element {
       return;
     }
     
-    // 检查是否选中了图像生成技能，或者通过关键词检测到图像生成请求
-    if (selectedSkill === 'image_generation') {
-      await handleImageGeneration(message);
-      return;
-    }
-    
-    // 如果没有选中技能，则通过关键词检测
-    const selectedAction = selectBestAction(message);
-    console.log('🔍 关键词检测结果:', {
-      message: message,
-      selectedAction: selectedAction,
-      actionType: selectedAction?.type,
-      actionName: selectedAction?.name
-    });
-    
-    // 检查是否符合各种特殊操作的条件
-    if (selectedAction && selectedAction.type === '图像生成') {
-      await handleImageGeneration(message);
-      return;
-    }
-    
-    // 检查Event Planner方案选择
+    // 检查Event Planner方案选择（优先级最高，因为在特定会话状态中）
     if (eventPlannerSessionId && (
       message.includes('选择方案') || 
       message.includes('重新生成') ||
+      message.includes('方案1') ||
+      message.includes('方案2') ||
+      message.includes('方案3') ||
       /方案\s*[123]/.test(message)
     )) {
       await handleEventPlannerSelection(message);
       return;
     }
     
-    // 检查Event Planner
-    if (selectedAction && selectedAction.type === '活动策划') {
-      console.log('触发Event Planner:', message);
+    // 步骤0：检查是否选择了指令模板（优先级最高）
+    if (selectedCommandId) {
+      // 指令模板应该总是走workflow逻辑，生成todolist
+      await handleWorkflowTask(message);
+      return;
+    }
+    
+    // 步骤1：智能意图识别
+    let intentResult: IntentResult;
+    
+    try {
+      // 使用快速关键词检测作为第一道防线
+      const quickIntent = quickIntentCheck(message);
+      
+      // 对于高置信度的结果，直接使用；否则调用LLM进一步确认
+      if (quickIntent.confidence >= 0.8) {
+        intentResult = quickIntent;
+      } else {
+        // 调用LLM进行更精确的意图分类
+        intentResult = await classifyIntent(message);
+      }
+    } catch (error) {
+      console.error('意图识别失败:', error);
+      intentResult = quickIntentCheck(message);
+    }
+    
+    // 步骤2：根据意图路由到不同的处理器
+    switch (intentResult.intent) {
+      case 'tool_call':
+        // 单工具调用
+        await handleToolCall(intentResult.toolId, message);
+        return;
+        
+      case 'workflow':
+        // 复杂任务，尝试生成Todo
+        await handleWorkflowTask(message);
+        return;
+        
+      case 'clarify':
+        // 需要更多信息
+        pushMessage({ 
+          role: 'agent', 
+          text: `请提供更多信息以便我更好地帮助您${intentResult.missingFields ? `：${intentResult.missingFields.join('、')}` : ''}` 
+        });
+        return;
+        
+      case 'text_answer':
+      default:
+        // 默认：普通AI回复
+        await handleAIResponse(undefined, undefined, message); // 🔥 传递当前消息
+        return;
+    }
+  }
+  
+  /**
+   * 🔄 Closing the Loop: 将工具执行结果传给LLM生成详细解释
+   * 
+   * 这是流程图中的核心机制：
+   * 工具执行 → 获得准确结果 → LLM基于结果做详细说明
+   * 
+   * @param toolResult 工具执行的结果
+   * @param userMessage 用户的原始问题
+   * @param toolId 工具ID
+   */
+  async function closingTheLoopWithLLM(
+    toolResult: any,
+    userMessage: string,
+    toolId: string,
+    existingAssistantId: string  // 复用已存在的assistantId
+  ): Promise<void> {
+    
+    const toolName = ACTION_LIBRARY.find(a => a.id === toolId)?.name || toolId;
+    const toolData = JSON.stringify(toolResult.data, null, 2);
+    
+    // 构建增强提示词：包含工具结果 + 用户原始请求
+    const enhancedPrompt = `【系统消息 - 工具执行结果】
+
+工具名称：${toolName}
+工具ID：${toolId}
+执行状态：✅ 成功
+执行时间：${new Date().toLocaleString('zh-CN')}
+
+工具返回的准确结果：
+\`\`\`json
+${toolData}
+\`\`\`
+
+【用户的原始请求】
+${userMessage}
+
+【你的任务】
+请基于上述工具提供的准确结果，为用户提供详细的解释和回答。
+
+重要要求：
+1. ✅ 使用工具提供的准确数据，不要自己重新计算
+2. 📋 如果用户要求步骤，提供清晰的计算或处理步骤
+3. 💡 用通俗易懂的语言解释，使用自然语言描述（例如："8乘以8等于64"）
+4. 🎯 直接回答用户的问题，不要重复工具结果的JSON格式
+5. ❌ 不要使用LaTeX数学公式（如\\frac、\\times等），使用普通文字和符号（×、÷、=）
+
+开始回答：`;
+    
+    // 调用LLM，传入增强提示词和已存在的assistantId
+    await handleAIResponse(enhancedPrompt, existingAssistantId);
+  }
+
+  /**
+   * 处理工具调用
+   */
+  async function handleToolCall(toolId: string | undefined, message: string): Promise<void> {
+    if (!toolId) {
+      console.error('toolId为空，无法调用工具');
+      await handleAIResponse(undefined, undefined, message); // 🔥 传递当前消息
+        return;
+    }
+    
+    // 特殊工具：图像生成
+    if (toolId === 'gpt_image_gen') {
+      await handleImageGeneration(message);
+        return;
+    }
+    
+    // 特殊工具：Event Planner
+    if (toolId === 'event_planning') {
       await handleEventPlanner(message);
       return;
     }
     
-    // 检查是否需要执行其他类型的预设动作
-    if (selectedAction && handleActionExecution(selectedAction, message)) {
-      // 如果成功处理了动作，就直接返回
-      return;
+    // 通用工具调用：calculator, text_processor, etc.
+    try {
+      // 智能参数提取：先尝试快速提取，失败则用LLM提取
+      let parameters: any = quickExtractParameters(toolId, message);
+      
+      if (!parameters) {
+        try {
+          parameters = await extractParameters(toolId, message);
+          
+          // 验证参数是否有效
+          if (!parameters || Object.keys(parameters).length === 0) {
+            await handleAIResponse(undefined, undefined, message); // 🔥 传递当前消息
+            return;
+          }
+        } catch (error) {
+          console.error('参数提取失败:', error);
+          await handleAIResponse(undefined, undefined, message); // 🔥 传递当前消息
+          return;
+        }
+      }
+      
+      // 创建助手消息（带loading状态）
+      const assistantId = generateId();
+      const now = Date.now();
+      upsertConversation(prev => prev.map(c => c.id === activeId ? {
+        ...c,
+        messages: [...c.messages, {
+          id: assistantId,
+          role: 'agent',
+          text: `正在执行${ACTION_LIBRARY.find(a => a.id === toolId)?.name || toolId}...`,
+          createdAt: now,
+          isThinking: true
+        }],
+        updatedAt: now
+      } : c));
+      
+      // 执行Action
+      const result = await actionExecutorService.executeAction({
+        action_id: toolId,
+        action_name: ACTION_LIBRARY.find(a => a.id === toolId)?.name || toolId,
+        action_type: ACTION_LIBRARY.find(a => a.id === toolId)?.type || 'code_execution',
+        parameters
+      });
+      
+      // 判断是否需要LLM详细解释（Closing the Loop）
+      const needsExplanation = message.includes('步骤') || message.includes('过程') || 
+                               message.includes('解释') || message.includes('详细') ||
+                               message.includes('为什么') || message.includes('怎么') ||
+                               message.includes('原理') || message.includes('方法');
+      
+      if (result.success) {
+        if (needsExplanation) {
+          // Closing the Loop: 保留loading消息，让handleAIResponse复用
+          // 将assistantId传递给closingTheLoopWithLLM
+          await closingTheLoopWithLLM(result, message, toolId, assistantId);
+        } else {
+          // 📊 直接显示工具结果：清除loading，显示结果
+          upsertConversation(prev => prev.map(conv => {
+            if (conv.id === activeId) {
+              return {
+                ...conv,
+                messages: conv.messages.filter(msg => msg.id !== assistantId),
+                updatedAt: Date.now()
+              };
+            }
+            return conv;
+          }));
+          
+          // 直接显示工具结果
+          let displayText = '';
+          if (toolId === 'calculator') {
+            displayText = `计算结果：${result.data?.result}\n\n表达式：${parameters.expression}`;
+          } else {
+            displayText = result.data?.result || result.data?.response || JSON.stringify(result.data);
+          }
+          
+          pushMessage({
+            role: 'agent',
+            text: displayText
+          });
+        }
+      } else {
+        // 工具执行失败，降级到LLM处理
+        upsertConversation(prev => prev.map(conv => {
+          if (conv.id === activeId) {
+            return {
+              ...conv,
+              messages: conv.messages.filter(msg => msg.id !== assistantId),
+              updatedAt: Date.now()
+            };
+          }
+          return conv;
+        }));
+        await handleAIResponse(undefined, undefined, message); // 🔥 传递当前消息
+      }
+    } catch (error) {
+      console.error('工具调用异常:', error);
+      // 失败时也切换到LLM处理
+      await handleAIResponse(undefined, undefined, message); // 🔥 传递当前消息
     }
-    
+  }
+  
+  /**
+   * 处理需要工作流的复杂任务
+   */
+  async function handleWorkflowTask(message: string): Promise<void> {
     // 检查是否选择了指令模板
     const selectedCommand = selectedCommandId ? commands.find(cmd => cmd.id === selectedCommandId) : null;
     
-    // 如果选择了指令模板，或者是多步骤任务，则生成Todo - 已禁用TODO功能
-    if (false) { // 禁用整个TODO功能
+    // 如果选择了指令模板，或者是复杂任务，则生成Todo
+    const shouldGenerateTodo = selectedCommand || message.length > 50;
+    
+    if (shouldGenerateTodo) { // 启用TODO功能
       // 显示固定的计划制定消息
       const templateInfo = selectedCommand?.name ? `（基于指令模板：${selectedCommand?.name}）` : '';
       pushMessage({ 
         role: 'agent', 
-        text: `已经收到你的需求${templateInfo}，正在制定计划…` 
+          text: `已经收到你的需求${templateInfo}，正在制定计划…`,
+          isSystemMessage: true // 🔥 系统提示
       });
       
       try {
@@ -1359,7 +1729,7 @@ ${selectedCommand?.todoList}
         
         const simpleTodo = await generateSimpleTodoWithLLM(enhancedMessage);
         if (simpleTodo && activeId) {
-          console.log('生成Todo成功，activeId:', activeId);
+          console.log('✅ 生成Todo成功，activeId:', activeId);
           // 只设置Todo，保持draft状态，等待用户手动确认执行
           setCurrentTodo(simpleTodo);
           
@@ -1367,22 +1737,39 @@ ${selectedCommand?.todoList}
           const finalTemplateInfo = selectedCommand?.name ? `（基于指令模板：${selectedCommand?.name}）` : '';
           pushMessage({ 
             role: 'agent', 
-            text: `📋 任务执行计划已生成${finalTemplateInfo}，共${simpleTodo?.totalSteps || 0}个步骤。请点击"开始执行"按钮来启动任务。` 
+            text: `📋 任务执行计划已生成${finalTemplateInfo}，共${simpleTodo?.totalSteps || 0}个步骤。请点击"开始执行"按钮来启动任务。`,
+            isSystemMessage: true // 🔥 系统提示，不发送给LLM
           });
           
           // 清除选中的指令
           setSelectedCommandId('');
         } else {
-          console.error('生成Todo失败或activeId为空:', { simpleTodo: !!simpleTodo, activeId });
+          console.error('❌ 生成Todo失败或activeId为空:', { simpleTodo: !!simpleTodo, activeId });
+          // 🆕 如果生成失败，清除指令选择并提示用户
+          setSelectedCommandId('');
+          pushMessage({ 
+            role: 'agent', 
+            text: '抱歉，无法生成任务执行计划。让我直接为您处理这个请求...',
+            isSystemMessage: true // 🔥 系统提示
+          });
+          // 降级到正常AI回复
+          await handleAIResponse(undefined, undefined, message); // 🔥 传递当前消息
         }
       } catch (error) {
-        console.error('生成简单Todo失败:', error);
+        console.error('❌ 生成简单Todo失败:', error);
+        // 清除指令选择
+        setSelectedCommandId('');
+        pushMessage({ 
+          role: 'agent', 
+          text: '抱歉，生成执行计划时遇到问题。让我直接为您处理...',
+          isSystemMessage: true // 🔥 系统提示
+        });
         // 如果生成失败，继续正常AI回复
-        await handleAIResponse();
+        await handleAIResponse(undefined, undefined, message); // 🔥 传递当前消息
       }
     } else {
       // 正常AI回复
-      await handleAIResponse();
+      await handleAIResponse(undefined, undefined, message); // 🔥 传递当前消息
     }
   }
   
@@ -1390,6 +1777,11 @@ ${selectedCommand?.todoList}
   function checkForPendingUserInput(): string | null {
     const active = getActive();
     if (!active) return null;
+    
+    // 🆕 首先检查是否有对应的executor（必须有正在运行的todo）
+    if (!activeId || !todoExecutors[activeId]) {
+      return null; // 没有executor，不处理用户输入
+    }
     
     // 查找最后一条包含AWAITING_USER_INPUT的消息
     for (let i = active.messages.length - 1; i >= 0; i--) {
@@ -1427,12 +1819,15 @@ ${selectedCommand?.todoList}
       await executor.handleUserInput(stepId, userResponse);
       console.log('执行器handleUserInput完成');
     } else {
-      console.error('未找到对应的Todo执行器', { 
+      console.error('未找到对应的Todo执行器，这可能是因为:', { 
         activeId, 
         availableExecutors: Object.keys(todoExecutors),
         todoExecutorsCount: Object.keys(todoExecutors).length,
-        currentTodo: !!getCurrentTodo()
+        currentTodo: !!getCurrentTodo(),
+        reason: 'executor已被清理或未创建，将使用正常AI回复'
       });
+      // 🆕 降级处理：如果找不到executor，当作正常消息处理
+      await handleAIResponse(undefined, undefined, userResponse); // 🔥 传递当前消息
     }
   }
   
@@ -1467,21 +1862,55 @@ ${selectedCommand?.todoList}
   function handleBottomTodoStart(): void {
     const currentTodo = getCurrentTodo();
     if (currentTodo && activeId) {
-      // 创建真实的Todo执行器
+      // 检查是否已存在executor（暂停后继续的情况）
+      const existingExecutor = todoExecutors[activeId];
+      
+      if (existingExecutor) {
+        // 📌 复用已存在的executor，不要重新创建
+        console.log('♻️ 复用已存在的Executor');
+        
+        // 更新Todo状态为运行中（保留已完成步骤的状态）
+        const resumedTodo = { 
+          ...currentTodo, 
+          status: 'running' as const,
+          userConfirmed: true,
+          hasStarted: true
+        };
+        setCurrentTodo(resumedTodo);
+        
+        // 继续执行
+        existingExecutor.resume();
+        
+        pushMessage({ 
+          role: 'agent', 
+          text: `▶️ 继续执行任务...`,
+          isSystemMessage: true // 🔥 系统提示
+        });
+      } else {
+        // 🆕 首次启动：创建新executor
+        const currentConv = conversations.find((c: Conversation) => c.id === activeId);
+        const lastUserMessage = currentConv?.messages
+          .filter((m: Message) => m.role === 'user')
+          .slice(-1)[0]?.text || '';
+        
+        console.log('📝 首次创建TodoExecutor，用户输入:', lastUserMessage);
+        
+        // 创建真实的Todo执行器（传入用户输入）
       const executor = createTodoExecutor(
         currentTodo,
         handleTodoStepProgress,
-        handleTodoComplete
+          handleTodoComplete,
+          lastUserMessage
       );
       
       // 保存执行器
       setTodoExecutors(prev => ({ ...prev, [activeId]: executor }));
       
-      // 更新Todo状态为运行中，并标记为用户已确认且已开始
+        // 更新Todo状态为运行中，只在首次启动时设置第一步为running
       const startedTodo = { 
         ...startTodoExecution(currentTodo), 
         userConfirmed: true,
-        hasStarted: true  // 标记为已开始，一旦设置就永远不会重置
+          hasStarted: true
       };
       setCurrentTodo(startedTodo);
       
@@ -1491,7 +1920,8 @@ ${selectedCommand?.todoList}
       // 显示开始执行消息
       pushMessage({ 
         role: 'agent', 
-        text: `🚀 开始执行任务计划...\n\n正在执行第1步：${startedTodo.items[0]?.text}` 
+          text: `🚀 开始执行任务计划...\n\n正在执行第1步：${startedTodo.items[0]?.text}`,
+          isSystemMessage: true // 🔥 系统提示，不发送给LLM
       });
       
       // 开始真实执行
@@ -1502,6 +1932,7 @@ ${selectedCommand?.todoList}
           text: `❌ 任务执行出错: ${error.message}` 
         });
       });
+      }
     }
   }
   
@@ -1545,16 +1976,8 @@ ${selectedCommand?.todoList}
     
     // 检查是否是用户输入询问（部分成功状态）
     if (!result.success && result.error === 'WAITING_FOR_USER_INPUT' && result.executionResult?.result?.partialSuccess) {
-      // 更新Todo状态为等待用户
-      const currentTodo = getCurrentTodo();
-      if (currentTodo) {
-        const updatedTodo = updateTodoItemStatus(
-          currentTodo, 
-          result.stepId, 
-          'waiting_user'
-        );
-        setCurrentTodo(updatedTodo);
-      }
+      // 🔄 更新Todo状态为等待用户（函数式更新）
+      updateCurrentTodoItemStatus(result.stepId, 'waiting_user');
       
       // 直接显示询问消息
       const askMessage = result.executionResult.result.askMessage;
@@ -1588,31 +2011,8 @@ ${selectedCommand?.todoList}
         method: result.executionResult?.result?.method
       });
       
-      // 更新Todo状态为完成
-      const currentTodo = getCurrentTodo();
-      if (currentTodo) {
-        console.log('📝 更新TODO状态前:', {
-          currentStep: currentTodo.currentStep,
-          totalSteps: currentTodo.totalSteps,
-          status: currentTodo.status,
-          items: currentTodo.items.map(i => ({ id: i.id, text: i.text, status: i.status }))
-        });
-        
-        const updatedTodo = updateTodoItemStatus(
-          currentTodo, 
-          result.stepId, 
-          'completed'
-        );
-        
-        console.log('📝 更新TODO状态后:', {
-          currentStep: updatedTodo.currentStep,
-          totalSteps: updatedTodo.totalSteps,
-          status: updatedTodo.status,
-          items: updatedTodo.items.map(i => ({ id: i.id, text: i.text, status: i.status }))
-        });
-        
-        setCurrentTodo(updatedTodo);
-      }
+      // 🔄 更新Todo状态为完成（函数式更新）
+      updateCurrentTodoItemStatus(result.stepId, 'completed');
       
       // 直接显示LLM处理结果作为消息
       const llmResponse = result.executionResult.result.llmResponse;
@@ -1634,16 +2034,8 @@ ${selectedCommand?.todoList}
       return;
     }
     
-    // 处理其他类型的任务（action类型）
-    const currentTodo = getCurrentTodo();
-    if (currentTodo) {
-      const updatedTodo = updateTodoItemStatus(
-        currentTodo, 
-        result.stepId, 
-        result.success ? 'completed' : 'failed'
-      );
-      setCurrentTodo(updatedTodo);
-    }
+    // 🔄 处理其他类型的任务（action类型，函数式更新）
+    updateCurrentTodoItemStatus(result.stepId, result.success ? 'completed' : 'failed');
     
     // 使用LLM处理执行结果并生成用户回复
     generateLLMResponseForResult(result);
@@ -1656,17 +2048,23 @@ ${selectedCommand?.todoList}
       // 构建给LLM的提示词
       const prompt = buildResultPrompt(result);
       
-      // 调用LLM生成回复
-      const messages: OllamaChatMessage[] = [
-        { role: 'user', content: prompt }
+      // 使用后端API
+      const appSettings = getAppSettings();
+      const messages = [
+        { role: 'user' as const, content: prompt }
       ];
       
-      let llmResponse = '';
-      const stream = streamOllamaChat(messages);
+      const response = await backendApiService.getChatCompletion(
+        messages,
+        0.7,
+        1000
+      );
       
-      for await (const chunk of stream) {
-        llmResponse += chunk;
+      if (!response.success || !response.content) {
+        throw new Error(response.error || '后端API调用失败');
       }
+      
+      const llmResponse = response.content;
       
       // 创建包含执行结果的消息
       const messageWithResult: Message = {
@@ -1753,22 +2151,40 @@ ${selectedCommand?.todoList}
         currentStatus: currentTodo.status,
         currentStep: currentTodo.currentStep,
         totalSteps: currentTodo.totalSteps,
-        allResultsSuccess: allResults.every(r => r.success)
+        allResultsSuccess: allResults.every(r => r.success),
+        currentItems: currentTodo.items.map(i => ({ id: i.id, status: i.status }))
       });
       
-      // 将整个TODO标记为完成
+      // 🔥 强制所有步骤状态为completed（因为已经全部执行完成）
       const completedTodo = {
         ...currentTodo,
         status: 'completed' as const,
-        currentStep: currentTodo.totalSteps // 设置为总步数表示全部完成
+        currentStep: currentTodo.totalSteps, // 设置为总步数表示全部完成
+        items: currentTodo.items.map(item => ({
+          ...item,
+          // 🔥 全部完成时，所有步骤都应该是completed状态
+          status: item.status === 'failed' ? 'failed' as const : 'completed' as const
+        }))
       };
       
-      setCurrentTodo(completedTodo);
+      console.log('🎉 最终完成状态:', {
+        status: completedTodo.status,
+        currentStep: completedTodo.currentStep,
+        totalSteps: completedTodo.totalSteps,
+        completedItems: completedTodo.items.map(i => ({ id: i.id, text: i.text.substring(0, 15), status: i.status }))
+      });
+      
+      // 🔥 使用函数式更新，确保基于最新状态
+      setConversationTodos(prev => ({
+        ...prev,
+        [activeId]: completedTodo
+      }));
       
       // 显示完成消息
       pushMessage({
         role: 'agent',
-        text: `✅ 任务计划执行完成！共完成 ${allResults.length} 个步骤。`
+        text: `✅ 任务计划执行完成！共完成 ${allResults.length} 个步骤。`,
+        isSystemMessage: true // 🔥 系统提示
       });
     }
     
@@ -1793,7 +2209,8 @@ ${selectedCommand?.todoList}
       setCurrentTodo(pausedTodo);
       pushMessage({ 
         role: 'agent', 
-        text: `⏸️ 任务执行已暂停` 
+        text: `⏸️ 任务执行已暂停`,
+        isSystemMessage: true // 🔥 系统提示
       });
     }
   }
@@ -2107,11 +2524,38 @@ ${selectedCommand?.todoList}
                             borderWidth: isSpecialMessage ? 2 : 1
                           }}
                         >
-                                                    {/* 如果消息包含Markdown格式，使用MarkdownRenderer */}
-                          {m.text.includes('#') || m.text.includes('**') || m.text.includes('|') ? (
+                          {/* 🆕 Loading状态：正在思考中 */}
+                          {m.isThinking ? (
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
+                              <CircularProgress size={16} sx={{ color: 'primary.main' }} />
+                              <Typography 
+                                sx={{ 
+                                  color: 'text.secondary',
+                                  fontStyle: 'italic',
+                                  animation: 'pulse 1.5s ease-in-out infinite',
+                                  '@keyframes pulse': {
+                                    '0%, 100%': { opacity: 0.6 },
+                                    '50%': { opacity: 1 }
+                                  }
+                                }}
+                              >
+                                正在思考中...
+                              </Typography>
+                            </Box>
+                          ) : (
+                            <>
+                          {/* 🆕 Bug Fix: 更全面的Markdown检测，Agent回复统一使用Markdown渲染 */}
+                          {m.role === 'agent' || 
+                           m.text.includes('#') || 
+                           m.text.includes('**') || 
+                           m.text.includes('|') || 
+                           m.text.includes('```') ||
+                           m.text.includes('- ') ? (
                             <MarkdownRenderer content={m.text} />
                           ) : (
                             <Typography whiteSpace="pre-wrap">{m.text}</Typography>
+                              )}
+                            </>
                           )}
                           
                           {/* Event Planner按钮 */}
@@ -2320,8 +2764,8 @@ ${selectedCommand?.todoList}
             )}
           </Box>
 
-          {/* 底部Todo面板 - 已禁用 */}
-          {false && getCurrentTodo() && (
+          {/* 底部Todo面板 */}
+          {getCurrentTodo() && (
             <Box sx={{ m: 2, mb: 1 }}>
               <BottomTodoPanel
                 todoList={getCurrentTodo()!}
@@ -2344,18 +2788,26 @@ ${selectedCommand?.todoList}
                 onDelete={() => setSelectedCommandId('')}
                 deleteIcon={<CloseIcon />}
                 color="primary"
-                variant="filled"
+                variant="outlined"
                 size="small"
                 sx={{
-                  bgcolor: 'primary.100',
-                  color: 'primary.800',
+                  bgcolor: 'primary.50',
+                  color: 'primary.700',
+                  borderColor: 'primary.200',
                   '& .MuiChip-deleteIcon': {
-                    color: 'primary.600',
+                    color: 'primary.500',
                     '&:hover': {
-                      color: 'primary.800'
+                      color: 'primary.700'
                     }
                   },
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                  boxShadow: '0 1px 4px rgba(25, 118, 210, 0.08)',
+                  fontWeight: 500,
+                  transition: 'all 0.2s ease-in-out',
+                  '&:hover': {
+                    bgcolor: 'primary.100',
+                    borderColor: 'primary.300',
+                    boxShadow: '0 2px 8px rgba(25, 118, 210, 0.12)'
+                  },
                   animation: 'fadeIn 0.3s ease-in-out',
                   '@keyframes fadeIn': {
                     from: { opacity: 0, transform: 'translateY(-10px)' },
@@ -2390,36 +2842,36 @@ ${selectedCommand?.todoList}
               }
             }}
           >
-            {/* 技能选择按钮 */}
+            {/* 指令模板选择按钮 */}
             <IconButton 
-              color={selectedSkill ? "primary" : "default"}
-              aria-label="select skill" 
-              onClick={() => setSkillDialogOpen(true)}
+              color={selectedCommandId ? "primary" : "default"}
+              aria-label="select command" 
+              onClick={() => setCommandDialogOpen(true)}
               sx={{ 
                 flexShrink: 0,
                 width: 40,
                 height: 40,
                 borderRadius: 2,
-                bgcolor: selectedSkill ? 'primary.50' : 'grey.50',
-                border: selectedSkill ? '1px solid' : '1px solid',
-                borderColor: selectedSkill ? 'primary.200' : 'grey.200',
-                color: selectedSkill ? 'primary.main' : 'grey.600',
+                bgcolor: selectedCommandId ? 'primary.50' : 'grey.50',
+                border: '1px solid',
+                borderColor: selectedCommandId ? 'primary.200' : 'grey.200',
+                color: selectedCommandId ? 'primary.600' : 'grey.600',
                 transition: 'all 0.2s ease-in-out',
                 '&:hover': {
-                  bgcolor: selectedSkill ? 'primary.100' : 'grey.100',
-                  borderColor: selectedSkill ? 'primary.300' : 'grey.300',
+                  bgcolor: selectedCommandId ? 'primary.100' : 'grey.100',
+                  borderColor: selectedCommandId ? 'primary.300' : 'grey.300',
                   transform: 'translateY(-1px)',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
                 }
               }}
-              title="选择技能"
+              title="选择指令模板"
             >
-              <ExtensionIcon fontSize="small" />
+              <PlaylistPlayIcon fontSize="small" />
             </IconButton>
             
             <Box sx={{ position: 'relative', flex: 1 }}>
-              {/* 技能提示覆盖层 */}
-              {selectedSkill && (
+              {/* 🆕 指令模板提示覆盖层 */}
+              {selectedCommandId && (
                 <Box sx={{
                   position: 'absolute',
                   left: 12,
@@ -2447,12 +2899,12 @@ ${selectedCommand?.todoList}
                     pointerEvents: 'auto',
                     cursor: 'default'
                   }}>
-                    {skills.find(s => s.id === selectedSkill)?.name}
+                    📋 {commands.find(c => c.id === selectedCommandId)?.name}
                   </Typography>
                   <IconButton 
                     className="close-button"
                     size="small" 
-                    onClick={() => setSelectedSkill(null)}
+                    onClick={() => setSelectedCommandId('')}
                     sx={{ 
                       width: 18, 
                       height: 18, 
@@ -2476,8 +2928,7 @@ ${selectedCommand?.todoList}
               <TextField
                 fullWidth
                 placeholder={
-                  selectedSkill === 'image_generation' ? "描述您想要生成的图像..." :
-                  selectedSkill === 'event_planning' ? "Event Planner输入消息..." :
+                  selectedCommandId ? `使用模板：${commands.find(c => c.id === selectedCommandId)?.name}...` :
                   "输入消息..."
                 }
                 value={input}
@@ -2495,18 +2946,18 @@ ${selectedCommand?.todoList}
                     bgcolor: 'transparent',
                     fontSize: '0.95rem',
                     '& input': {
-                      padding: selectedSkill ? '12px 16px 12px 100px' : '12px 16px',
+                      padding: selectedCommandId ? '12px 16px 12px 200px' : '12px 16px',
                       borderRadius: 2,
                       bgcolor: 'white',
                       border: '1px solid',
-                      borderColor: selectedSkill ? 'primary.200' : 'grey.200',
+                      borderColor: 'grey.200',
                       transition: 'all 0.2s ease-in-out',
                       '&:focus': {
                         borderColor: 'primary.main',
                         boxShadow: '0 0 0 3px rgba(25, 118, 210, 0.08)'
                       },
                       '&::placeholder': {
-                        color: selectedSkill ? 'primary.600' : 'grey.500',
+                        color: 'grey.500',
                         opacity: 1
                       }
                     }
@@ -2787,74 +3238,6 @@ ${selectedCommand?.todoList}
             </Button>
           )}
           <Button onClick={() => setCommandDialogOpen(false)}>关闭</Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* 技能选择弹窗 */}
-      <Dialog
-        open={skillDialogOpen}
-        onClose={() => setSkillDialogOpen(false)}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>选择技能</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            {skills.map((skill) => (
-              <Paper
-                key={skill.id}
-                variant="outlined"
-                sx={{
-                  p: 2,
-                  cursor: 'pointer',
-                  border: selectedSkill === skill.id ? 2 : 1,
-                  borderColor: selectedSkill === skill.id ? 'primary.main' : 'divider',
-                  bgcolor: selectedSkill === skill.id ? 'primary.50' : 'transparent',
-                  transition: 'all 0.2s ease-in-out',
-                  '&:hover': {
-                    bgcolor: selectedSkill === skill.id ? 'primary.100' : 'grey.50',
-                    transform: 'translateY(-1px)',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-                  }
-                }}
-                onClick={() => {
-                  if (skill.id === 'event_planning') {
-                    setEventPlannerDialogOpen(true);
-                    setSkillDialogOpen(false);
-                  } else {
-                    setSelectedSkill(skill.id);
-                    setSkillDialogOpen(false);
-                  }
-                }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <ExtensionIcon sx={{ 
-                    color: selectedSkill === skill.id ? 'primary.main' : 'grey.600',
-                    fontSize: 24 
-                  }} />
-                  <Box>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
-                      {skill.name}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {skill.description}
-                    </Typography>
-                  </Box>
-                </Box>
-              </Paper>
-            ))}
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          {selectedSkill && (
-            <Button 
-              onClick={() => setSelectedSkill(null)}
-              color="error"
-            >
-              清除选择
-            </Button>
-          )}
-          <Button onClick={() => setSkillDialogOpen(false)}>关闭</Button>
         </DialogActions>
       </Dialog>
 

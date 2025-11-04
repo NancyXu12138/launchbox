@@ -123,7 +123,28 @@ interface MarkdownRendererProps {
   sx?: any;
 }
 
+/**
+ * 预处理文本，保护数学表达式中的特殊符号不被Markdown解析
+ * 将数学表达式用反引号包裹，防止*被当作斜体
+ */
+function preprocessMathExpressions(text: string): string {
+  // 匹配可能的数学表达式：包含数字和运算符的内容
+  // 例如：8*8*9*123+567-1232/890*10
+  const mathPattern = /\b\d+[\d+\-*/().\s]*[\d+\-*/()]+\b/g;
+  
+  return text.replace(mathPattern, (match) => {
+    // 如果表达式中包含*或/，用反引号包裹
+    if (match.includes('*') || match.includes('/')) {
+      return `\`${match}\``;
+    }
+    return match;
+  });
+}
+
 const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, sx }) => {
+  // 预处理内容，保护数学表达式
+  const processedContent = preprocessMathExpressions(content);
+  
   return (
     <StyledMarkdownBox sx={sx}>
       <ReactMarkdown
@@ -147,7 +168,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, sx }) => {
           ),
         }}
       >
-        {content}
+        {processedContent}
       </ReactMarkdown>
     </StyledMarkdownBox>
   );

@@ -1,15 +1,82 @@
-// 简单Todo生成器 - 使用LLM智能分析用户输入
+/**
+ * Todo生成服务 (Todo Generation Service)
+ * 
+ * 📋 功能说明：
+ * 将用户的需求自动拆解为多步骤的执行计划（Todo List）。
+ * 使用LLM智能分析用户输入，识别任务步骤并分类任务类型。
+ * 
+ * 🎯 核心能力：
+ * 1. 📝 判断是否为多步骤任务
+ * 2. 🤖 调用LLM分析任务结构
+ * 3. 🏷️ 为每个步骤分类：ACTION / LLM / USER_INPUT
+ * 4. ✨ 生成结构化的Todo List
+ * 
+ * 💡 使用场景：
+ * 
+ * 用户说："帮我分析竞品游戏"
+ * → 判断为多步骤任务
+ * → LLM分析：
+ *   步骤1: [ACTION] 搜索竞品信息
+ *   步骤2: [LLM] 分析竞品特点
+ *   步骤3: [LLM] 生成对比报告
+ * → 返回结构化的Todo List
+ * 
+ * 🔄 工作流程：
+ * ```
+ * 用户输入
+ *   ↓
+ * isMultiStepTask() → 快速判断
+ *   ↓
+ * generateSimpleTodoWithLLM() → LLM分析
+ *   ↓
+ * parseStepsFromLLMResponse() → 解析步骤
+ *   ↓
+ * 返回 SimpleTodoList
+ * ```
+ * 
+ * 🔧 任务类型说明：
+ * - ACTION: 可通过工具完成（计算、搜索等）
+ * - LLM: 需要LLM处理（分析、生成文本等）
+ * - USER_INPUT: 需要用户输入信息
+ * 
+ * @module simpleTodoGenerator
+ */
 
-import { streamOllamaChat, OllamaChatMessage } from './ollama';
+import { backendApiService } from './backendApiService';
+import { selectModelForTask } from './modelConfig';
 import { SimpleTodoList, SimpleTodoItem, TodoTaskType } from '../components/BottomTodoPanel';
-import { selectBestAction } from './actionLibrary';
+import { selectBestAction } from '../../shared/action-library';
 
-// 生成唯一ID
+/**
+ * 生成唯一ID
+ * 
+ * 使用时间戳和随机数组合生成36进制ID
+ * 
+ * @returns 唯一的ID字符串
+ */
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
 }
 
-// 检测是否为多步骤任务
+/**
+ * 检测是否为多步骤任务
+ * 
+ * 通过关键词匹配快速判断用户输入是否包含多个步骤。
+ * 
+ * 匹配的关键词：
+ * - 顺序词："先...再"、"然后"、"接着"
+ * - 流程词："步骤"、"流程"、"计划"
+ * - 组合词："并且"、"同时"、"多个"
+ * 
+ * @param userInput - 用户输入的文本
+ * @returns true = 多步骤任务, false = 单步骤任务
+ * 
+ * @example
+ * ```typescript
+ * isMultiStepTask("先计算2+2，再分析结果") // true
+ * isMultiStepTask("计算2+2") // false
+ * ```
+ */
 export function isMultiStepTask(userInput: string): boolean {
   const multiStepKeywords = [
     '先.*再', '先.*然后', '首先.*然后', '第一.*第二',
@@ -109,6 +176,17 @@ function parseStepsFromLLMResponse(response: string): Array<{text: string, taskT
             taskType = classifyTaskType(text);
         }
         
+        // 🆕 智能修正：如果是USER_INPUT但包含"提取"类关键词，改为LLM
+        if (taskType === 'user_input') {
+          const extractKeywords = ['提取', '解析', '识别', '检测'];
+          const textLower = text.toLowerCase();
+          if (extractKeywords.some(kw => textLower.includes(kw))) {
+            console.log(`🔧 修正步骤类型: "${text}" 从 user_input → llm`);
+            taskType = 'llm';
+            userPrompt = undefined;
+          }
+        }
+        
         steps.push({ text, taskType, userPrompt });
       }
     }
@@ -123,40 +201,85 @@ function classifyTaskType(stepText: string): TodoTaskType {
   
   // 检查是否可以用动作库处理
   if (selectBestAction(stepText)) {
+    console.log(`📌 步骤"${stepText}"识别为action类型`);
     return 'action';
   }
   
-  // 检查是否需要用户输入
+  // 🆕 检查是否是"提取"类任务（从已有信息中提取，不需要用户输入）
+  const extractKeywords = ['提取', '解析', '识别', '分析', '检测'];
+  if (extractKeywords.some(keyword => text.includes(keyword))) {
+    console.log(`📌 步骤"${stepText}"包含提取类关键词，识别为llm类型`);
+    return 'llm'; // 提取类任务使用LLM处理，不需要用户输入
+  }
+  
+  // 检查是否需要用户输入（真正需要用户交互的场景）
   const userInputKeywords = [
-    '询问', '获取', '确认', '选择', '输入', '提供', 
-    '告诉我', '你的', '用户的', '偏好', '需求'
+    '询问用户', '让用户', '请用户', '用户选择', '用户确认',
+    '告诉我你的', '你想要', '你希望', '你的偏好'
   ];
   
   if (userInputKeywords.some(keyword => text.includes(keyword))) {
+    console.log(`📌 步骤"${stepText}"包含用户输入关键词，识别为user_input类型`);
     return 'user_input';
   }
   
   // 默认为LLM处理
+  console.log(`📌 步骤"${stepText}"默认识别为llm类型`);
   return 'llm';
 }
 
-// 使用LLM生成简单Todo列表
+/**
+ * 使用LLM生成简单Todo列表（主函数）
+ * 
+ * 调用LLM分析用户输入，自动生成结构化的执行计划。
+ * 
+ * 工作流程：
+ * 1. 生成分析提示词
+ * 2. 调用后端LLM API
+ * 3. 解析LLM返回的步骤
+ * 4. 为每个步骤分类任务类型
+ * 5. 构建SimpleTodoList对象
+ * 
+ * @param userInput - 用户的需求描述
+ * @returns Promise<SimpleTodoList | null> - 生成的Todo列表，如果不是多步骤任务返回null
+ * 
+ * @example
+ * ```typescript
+ * const todoList = await generateSimpleTodoWithLLM("帮我分析竞品游戏");
+ * if (todoList) {
+ *   // 开始执行Todo列表
+ *   executeTodoList(todoList);
+ * } else {
+ *   // 单步骤任务，直接处理
+ *   handleSingleTask(userInput);
+ * }
+ * ```
+ */
 export async function generateSimpleTodoWithLLM(userInput: string): Promise<SimpleTodoList | null> {
   try {
     // 生成分析提示词
     const prompt = generateTodoAnalysisPrompt(userInput);
     
     // 调用LLM
-    const messages: OllamaChatMessage[] = [
-      { role: 'user', content: prompt }
+    // 使用后端API和适合Todo生成的模型
+    const modelConfig = selectModelForTask('todo_generation');
+    const messages = [
+      { role: 'user' as const, content: prompt }
     ];
     
-    let llmResponse = '';
-    const stream = streamOllamaChat(messages);
+    const response = await backendApiService.getChatCompletion(
+      messages,
+      modelConfig.temperature,
+      modelConfig.max_tokens,
+      modelConfig.model
+    );
     
-    for await (const chunk of stream) {
-      llmResponse += chunk;
+    if (!response.success || !response.content) {
+      console.error('后端API调用失败:', response.error);
+      return null;
     }
+    
+    const llmResponse = response.content;
     
     // 解析LLM返回的步骤
     const steps = parseStepsFromLLMResponse(llmResponse);
@@ -184,6 +307,8 @@ export async function generateSimpleTodoWithLLM(userInput: string): Promise<Simp
       totalSteps: todoItems.length
     };
     
+    console.log('📋 生成的TodoList:', todoItems.map(t => `${t.text} [${t.taskType}]`));
+    
     return todoList;
     
   } catch (error) {
@@ -192,7 +317,16 @@ export async function generateSimpleTodoWithLLM(userInput: string): Promise<Simp
   }
 }
 
-// 更新Todo项状态
+/**
+ * 更新Todo项状态
+ * 
+ * 更新指定Todo项的状态，并自动计算整体进度。
+ * 
+ * @param todoList - Todo列表
+ * @param itemId - 要更新的Todo项ID
+ * @param newStatus - 新的状态
+ * @returns 更新后的Todo列表
+ */
 export function updateTodoItemStatus(
   todoList: SimpleTodoList, 
   itemId: string, 
@@ -237,12 +371,24 @@ export function updateTodoItemStatus(
   };
 }
 
-// 获取下一个待执行的Todo项
+/**
+ * 获取下一个待执行的Todo项
+ * 
+ * @param todoList - Todo列表
+ * @returns 下一个待执行的Todo项，如果没有返回null
+ */
 export function getNextPendingTodo(todoList: SimpleTodoList): SimpleTodoItem | null {
   return todoList.items.find(item => item.status === 'pending') || null;
 }
 
-// 开始执行Todo列表
+/**
+ * 开始执行Todo列表
+ * 
+ * 将第一个待执行的Todo项设为运行中状态。
+ * 
+ * @param todoList - Todo列表
+ * @returns 更新后的Todo列表
+ */
 export function startTodoExecution(todoList: SimpleTodoList): SimpleTodoList {
   // 将第一个待执行的项目设为运行中
   const nextTodo = getNextPendingTodo(todoList);
@@ -252,7 +398,14 @@ export function startTodoExecution(todoList: SimpleTodoList): SimpleTodoList {
   return todoList;
 }
 
-// 完成当前步骤并开始下一步
+/**
+ * 完成当前步骤并开始下一步
+ * 
+ * 将当前运行中的Todo项标记为完成，并启动下一个待执行的项。
+ * 
+ * @param todoList - Todo列表
+ * @returns 更新后的Todo列表
+ */
 export function completeCurrentAndStartNext(todoList: SimpleTodoList): SimpleTodoList {
   // 找到当前运行中的项目
   const runningItem = todoList.items.find(item => item.status === 'running');

@@ -1,38 +1,57 @@
+/**
+ * 设置对话框组件
+ * 
+ * 功能：
+ * - 配置后端API地址
+ * - 启用/禁用后端API
+ */
+
 import React from 'react';
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Stack } from '@mui/material';
-import { getSettings, setSettings, OllamaSettings } from '../../services/settings';
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Stack, FormControlLabel, Switch } from '@mui/material';
+import { getAppSettings, setAppSettings, AppSettings } from '../../services/settings';
 
 export default function SettingsDialog(): JSX.Element {
   const [open, setOpen] = React.useState(false);
-  const [form, setForm] = React.useState<OllamaSettings>(() => getSettings());
+  const [form, setForm] = React.useState<AppSettings>(() => getAppSettings());
 
   React.useEffect(() => {
-    const handler = () => setOpen(true);
+    const handler = () => {
+      // 每次打开时重新加载设置
+      setForm(getAppSettings());
+      setOpen(true);
+    };
     document.addEventListener('open-settings-dialog', handler as unknown as EventListener);
     return () => document.removeEventListener('open-settings-dialog', handler as unknown as EventListener);
   }, []);
 
   function handleSave(): void {
-    setSettings(form);
+    setAppSettings(form);
     setOpen(false);
+    console.log('✅ 设置已保存:', form);
   }
 
   return (
-    <Dialog open={open} onClose={() => setOpen(false)}>
-      <DialogTitle>设置</DialogTitle>
+    <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
+      <DialogTitle>系统设置</DialogTitle>
       <DialogContent>
-        <Stack spacing={2} sx={{ mt: 1, minWidth: 360 }}>
-          <TextField
-            label="Ollama Base URL"
-            placeholder="/ollama 或 http://127.0.0.1:11434"
-            value={form.baseUrl}
-            onChange={(e) => setForm(f => ({ ...f, baseUrl: e.target.value }))}
+        <Stack spacing={3} sx={{ mt: 2 }}>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={form.useBackendApi}
+                onChange={(e) => setForm(f => ({ ...f, useBackendApi: e.target.checked }))}
+              />
+            }
+            label="使用后端API"
           />
+          
           <TextField
-            label="模型"
-            placeholder="llama3.1 或 qwen3:8b"
-            value={form.model}
-            onChange={(e) => setForm(f => ({ ...f, model: e.target.value }))}
+            label="后端API地址"
+            placeholder="http://localhost:8001"
+            value={form.backendUrl}
+            onChange={(e) => setForm(f => ({ ...f, backendUrl: e.target.value }))}
+            disabled={!form.useBackendApi}
+            helperText="后端服务器的地址，默认为 http://localhost:8001"
           />
         </Stack>
       </DialogContent>
@@ -43,5 +62,3 @@ export default function SettingsDialog(): JSX.Element {
     </Dialog>
   );
 }
-
-

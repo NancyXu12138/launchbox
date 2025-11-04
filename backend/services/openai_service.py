@@ -23,7 +23,8 @@ class OpenAIService:
         self, 
         messages: List[Dict[str, str]], 
         temperature: float = 0.7,
-        max_tokens: int = 16000
+        max_tokens: int = 16000,
+        model: str = None
     ) -> AsyncGenerator[str, None]:
         """
         Stream chat completion from OpenAI API
@@ -32,14 +33,18 @@ class OpenAIService:
             messages: List of message objects with 'role' and 'content'
             temperature: Sampling temperature (0-2)
             max_tokens: Maximum tokens to generate
+            model: Optional model override
             
         Yields:
             str: Streaming content chunks
         """
         try:
+            # Use provided model or fall back to default
+            selected_model = model if model else self.model
+            
             # Create streaming chat completion
             stream = await self.client.chat.completions.create(
-                model=self.model,
+                model=selected_model,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -63,7 +68,8 @@ class OpenAIService:
         self, 
         messages: List[Dict[str, str]], 
         temperature: float = 0.7,
-        max_tokens: int = 16000
+        max_tokens: int = 16000,
+        model: str = None
     ) -> Dict[str, Any]:
         """
         Get non-streaming chat completion from OpenAI API
@@ -72,13 +78,17 @@ class OpenAIService:
             messages: List of message objects with 'role' and 'content'
             temperature: Sampling temperature (0-2)
             max_tokens: Maximum tokens to generate
+            model: Optional model override
             
         Returns:
             Dict containing the response
         """
         try:
+            # Use provided model or fall back to default
+            selected_model = model if model else self.model
+            
             response = await self.client.chat.completions.create(
-                model=self.model,
+                model=selected_model,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens

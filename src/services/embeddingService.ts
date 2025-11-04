@@ -1,15 +1,71 @@
+/**
+ * 文本向量化服务 (Text Embedding Service)
+ * 
+ * 📋 功能说明：
+ * 将文本转换为数字向量，用于计算文本相似度和语义搜索。
+ * 使用 TensorFlow.js 和 Universal Sentence Encoder 模型。
+ * 
+ * 🎯 核心能力：
+ * 1. 📝 文本向量化（文字 → 数字数组）
+ * 2. 🔍 计算相似度（余弦相似度）
+ * 3. 🔎 语义搜索（找到最相似的文本）
+ * 
+ * 💡 使用场景：
+ * 
+ * 场景1: 知识库搜索
+ * ```
+ * 用户问："如何提升留存率？"
+ * → 向量化：[0.1, 0.3, 0.8, ...]
+ * → 在知识库中搜索相似的向量
+ * → 找到相关的历史案例
+ * ```
+ * 
+ * 场景2: 文档相似度对比
+ * ```
+ * 文档A："这个游戏很好玩" → [0.1, 0.8, 0.3, ...]
+ * 文档B："这款游戏不错"   → [0.2, 0.7, 0.4, ...]
+ * → 计算相似度：0.95 → 非常相似
+ * ```
+ * 
+ * 🔧 技术栈：
+ * - TensorFlow.js：机器学习框架
+ * - Universal Sentence Encoder：Google的句子编码模型
+ * - WebGL/CPU后端：硬件加速
+ * 
+ * ⚠️ 注意：
+ * - 首次使用需要下载模型（约50MB）
+ * - 优先使用WebGL加速，不可用时降级到CPU
+ * 
+ * @module embeddingService
+ */
+
 import * as tf from '@tensorflow/tfjs';
 import '@tensorflow/tfjs-backend-cpu';
 import '@tensorflow/tfjs-backend-webgl';
 import * as use from '@tensorflow-models/universal-sentence-encoder';
 
-// Embedding服务类
+/**
+ * Embedding服务类
+ * 
+ * 提供文本向量化和相似度计算功能。
+ */
 class EmbeddingService {
   private model: use.UniversalSentenceEncoder | null = null;
   private isLoading = false;
   private loadPromise: Promise<void> | null = null;
 
-  // 初始化模型
+  /**
+   * 初始化模型
+   * 
+   * 加载Universal Sentence Encoder模型。
+   * 首次调用会下载模型文件（约50MB），后续从缓存加载。
+   * 
+   * @example
+   * ```typescript
+   * await embeddingService.initialize();
+   * console.log('模型已就绪');
+   * ```
+   */
   async initialize(): Promise<void> {
     if (this.model) return;
     
@@ -55,12 +111,33 @@ class EmbeddingService {
     }
   }
 
-  // 检查模型是否已加载
+  /**
+   * 检查模型是否已加载
+   * 
+   * @returns true = 已加载, false = 未加载
+   */
   isReady(): boolean {
     return this.model !== null;
   }
 
-  // 文本向量化
+  /**
+   * 批量文本向量化
+   * 
+   * 将多个文本转换为向量数组。
+   * 
+   * @param texts - 文本数组
+   * @returns Promise<number[][]> - 向量数组（每个文本对应一个512维向量）
+   * 
+   * @example
+   * ```typescript
+   * const vectors = await embeddingService.embed([
+   *   "这个游戏很好玩",
+   *   "这款游戏不错"
+   * ]);
+   * // vectors[0] = [0.1, 0.3, ..., 0.8]  (512个数字)
+   * // vectors[1] = [0.2, 0.4, ..., 0.7]  (512个数字)
+   * ```
+   */
   async embed(texts: string[]): Promise<number[][]> {
     if (!this.model) {
       throw new Error('模型未初始化，请先调用 initialize()');
@@ -75,13 +152,43 @@ class EmbeddingService {
     }
   }
 
-  // 单个文本向量化
+  /**
+   * 单个文本向量化
+   * 
+   * 将单个文本转换为向量。
+   * 
+   * @param text - 文本
+   * @returns Promise<number[]> - 向量（512维）
+   * 
+   * @example
+   * ```typescript
+   * const vector = await embeddingService.embedSingle("这个游戏很好玩");
+   * // vector = [0.1, 0.3, ..., 0.8]  (512个数字)
+   * ```
+   */
   async embedSingle(text: string): Promise<number[]> {
     const embeddings = await this.embed([text]);
     return embeddings[0];
   }
 
-  // 计算余弦相似度
+  /**
+   * 计算余弦相似度
+   * 
+   * 计算两个向量的相似度（0-1之间，1表示完全相同）。
+   * 
+   * @param vecA - 向量A
+   * @param vecB - 向量B
+   * @returns 相似度（0-1之间）
+   * 
+   * @example
+   * ```typescript
+   * const similarity = embeddingService.cosineSimilarity(
+   *   [0.1, 0.8, 0.3],
+   *   [0.2, 0.7, 0.4]
+   * );
+   * // similarity = 0.95 (非常相似)
+   * ```
+   */
   cosineSimilarity(vecA: number[], vecB: number[]): number {
     if (vecA.length !== vecB.length) {
       throw new Error('向量维度不匹配');

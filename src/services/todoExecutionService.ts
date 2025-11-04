@@ -1,9 +1,10 @@
 // Todo执行服务 - 真实调用动作库工具
 
 import { SimpleTodoList, SimpleTodoItem } from '../components/BottomTodoPanel';
-import { selectBestAction, getActionById, ActionItem } from './actionLibrary';
+import { selectBestAction, getActionById } from '../../shared/action-library';
+import type { ActionDefinition } from '../../shared/action-types';
 import { executeAction, ActionExecutionResult } from './actionExecutor';
-import { streamOllamaChat, OllamaChatMessage } from './ollama';
+import { backendApiService } from './backendApiService';
 import { searchKnowledgeBase } from './knowledgeBase';
 import { performContextualReasoning, ReasoningResult } from './contextualReasoning';
 
@@ -12,7 +13,7 @@ export interface TodoStepResult {
   success: boolean;
   stepId: string;
   stepText: string;
-  actionUsed?: ActionItem;
+  actionUsed?: ActionDefinition;
   executionResult?: ActionExecutionResult;
   error?: string;
   executionTime: number;
@@ -28,15 +29,31 @@ export class TodoExecutor {
   private isRunning: boolean = false;
   private isPaused: boolean = false;
   private results: TodoStepResult[] = [];
+  private userOriginalInput: string = ''; // 🆕 存储用户的原始输入，用于参数提取
 
   constructor(
     todoList: SimpleTodoList,
     onProgress: (result: TodoStepResult) => void,
-    onComplete: (allResults: TodoStepResult[]) => void
+    onComplete: (allResults: TodoStepResult[]) => void,
+    userInput?: string  // 🆕 可选的用户输入参数
   ) {
     this.todoList = todoList;
     this.onProgress = onProgress;
     this.onComplete = onComplete;
+    this.userOriginalInput = userInput || '';
+    console.log('🏗️ TodoExecutor构造函数，用户输入:', this.userOriginalInput);
+  }
+
+  // 辅助方法：调用后端API获取LLM响应
+  private async callLLM(prompt: string, maxTokens: number = 2000): Promise<string> {
+    const messages = [{ role: 'user' as const, content: prompt }];
+    const response = await backendApiService.getChatCompletion(messages, 0.7, maxTokens);
+    
+    if (!response.success || !response.content) {
+      throw new Error(response.error || '后端API调用失败');
+    }
+    
+    return response.content;
   }
 
   // 开始执行Todo列表
@@ -143,15 +160,7 @@ export class TodoExecutor {
 - 保持回答的专业性和准确性
 - 如果需要前置信息但未提供，请明确说明需要什么信息`;
       
-      const messages: OllamaChatMessage[] = [
-        { role: 'user', content: prompt }
-      ];
-
-      let response = '';
-      const stream = streamOllamaChat(messages);
-      for await (const chunk of stream) {
-        response += chunk;
-      }
+      const response = await this.callLLM(prompt, 2000);
 
       const executionResult = {
         success: true,
@@ -389,15 +398,7 @@ export class TodoExecutor {
 - 只有在信息明显不完整或不相关时才要求补充
 - followUpQuestion应该友好、具体，指出需要什么信息`;
 
-      const messages: OllamaChatMessage[] = [
-        { role: 'user', content: prompt }
-      ];
-
-      let response = '';
-      const stream = streamOllamaChat(messages);
-      for await (const chunk of stream) {
-        response += chunk;
-      }
+      const response = await this.callLLM(prompt, 2000);
 
       // 解析LLM响应
       const jsonMatch = response.match(/\{[\s\S]*\}/);
@@ -459,23 +460,32 @@ export class TodoExecutor {
 
   // 执行动作库任务
   private async executeActionTask(step: SimpleTodoItem, startTime: number): Promise<TodoStepResult> {
+    console.log('📍 开始执行动作库任务:', step.text);
+    
     // 1. 分析步骤文本，选择合适的动作
     const action = await this.selectActionForStep(step.text);
     
     if (!action) {
-      throw new Error(`无法找到匹配的动作库工具: ${step.text}`);
+      console.log('⚠️ 无法匹配到具体工具，将使用LLM处理');
+      // 改为使用LLM处理，而不是抛出错误
+      return await this.executeWithLLM(step, startTime);
     }
 
-    // 2. 根据动作类型执行
+    console.log('✅ 匹配到动作:', action.name, `类型: ${action.type}`);
+
+    // 2. 根据动作类型执行（使用英文类型匹配）
     switch (action.type) {
-      case '执行代码':
+      case 'code_execution':
         return await this.executeCodeAction(step, action, startTime);
-      case 'API调用':
+      case 'api_call':
         return await this.executeApiAction(step, action, startTime);
-      case '提示工程':
+      case 'llm_task':
         return await this.executePromptAction(step, action, startTime);
+      case 'image_generation':
+        return await this.executeImageGenerationAction(step, action, startTime);
       default:
-        throw new Error(`不支持的动作类型: ${action.type}`);
+        console.log(`⚠️ 不支持的动作类型: ${action.type}，使用LLM处理`);
+        return await this.executeWithLLM(step, startTime);
     }
   }
 
@@ -488,7 +498,8 @@ export class TodoExecutor {
       const reasoningResult = await performContextualReasoning(
         step,
         this.results, // 前面步骤的执行结果
-        this.todoList
+        this.todoList,
+        this.userOriginalInput // 🆕 传入用户原始输入
       );
 
       console.log('✅ 推理完成，shouldProceed:', reasoningResult.shouldProceed);
@@ -515,17 +526,8 @@ export class TodoExecutor {
       console.log('✅ 增强提示词构建完成，长度:', enhancedPrompt.length);
 
       console.log('🚀 执行LLM任务...');
-      const messages: OllamaChatMessage[] = [
-        { role: 'user', content: enhancedPrompt }
-      ];
-
-      let response = '';
-      const stream = streamOllamaChat(messages);
       console.log('📥 开始接收LLM响应...');
-      
-      for await (const chunk of stream) {
-        response += chunk;
-      }
+      const response = await this.callLLM(enhancedPrompt, 2000);
       console.log('✅ LLM响应完成，长度:', response.length);
 
       const executionResult = {
@@ -584,15 +586,7 @@ export class TodoExecutor {
 - 保持友好和专业的语调
 - 不超过50字`;
 
-      const messages: OllamaChatMessage[] = [
-        { role: 'user', content: prompt }
-      ];
-
-      let response = '';
-      const stream = streamOllamaChat(messages);
-      for await (const chunk of stream) {
-        response += chunk;
-      }
+      const response = await this.callLLM(prompt, 2000);
 
       // 返回部分成功结果，包含询问消息
       return {
@@ -641,7 +635,7 @@ export class TodoExecutor {
   }
 
   // 选择适合步骤的动作
-  private async selectActionForStep(stepText: string): Promise<ActionItem | null> {
+  private async selectActionForStep(stepText: string): Promise<ActionDefinition | null> {
     // 首先尝试基于关键词的快速匹配
     const quickMatch = selectBestAction(stepText);
     if (quickMatch) {
@@ -653,47 +647,61 @@ export class TodoExecutor {
   }
 
   // 使用LLM选择动作
-  private async selectActionWithLLM(stepText: string): Promise<ActionItem | null> {
+  private async selectActionWithLLM(stepText: string): Promise<ActionDefinition | null> {
     try {
-      const prompt = `
-你是一个任务分析专家。用户有一个任务步骤，请你从以下可用动作中选择最合适的一个：
+      console.log('🤖 使用LLM智能选择Action...');
+      
+      const prompt = `你是一个任务分析专家。分析任务步骤，从以下工具ID中选择最合适的：
 
-可用动作：
-1. 数学计算器 - 执行数学运算
-2. 文本处理工具 - 文本分析和处理
-3. JSON数据处理 - JSON解析和格式化
-4. 日期时间处理 - 时间相关操作
-5. Google 搜索竞品信息 - 搜索竞品资讯
-6. Google Sheets 数据读取 - 读取表格数据
-7. 用户评论情感分析 - 分析评论情感
-8. 游戏标签分类 - 游戏类型分类
+【可用工具ID及其功能】
+- calculator: 数学计算（加减乘除、函数运算）
+- text_processor: 文本处理（字数统计、大小写转换）
+- json_processor: JSON处理（格式化、验证）
+- datetime_processor: 时间处理（获取时间、格式化）
+- google_search: 搜索（竞品资讯）
+- sentiment_analysis: 情感分析（分析评论）
+- game_classification: 游戏分类（生成标签）
+- gpt_image_gen: 图像生成（创建图像）
 
-任务步骤: "${stepText}"
+【任务步骤】: "${stepText}"
 
-请只回答动作的ID号(1-8)，如果没有合适的动作请回答"0"。
-`;
+【匹配规则】
+1. 包含"计算"、"数学"、"表达式" → calculator
+2. 包含"文本"、"字数"、"统计字" → text_processor
+3. 包含"JSON"、"json"、"数据格式" → json_processor
+4. 包含"时间"、"日期"、"当前时间" → datetime_processor
+5. 包含"搜索"、"查找"、"竞品" → google_search
+6. 包含"情感"、"评论分析" → sentiment_analysis
+7. 包含"游戏分类"、"标签"、"游戏类型" → game_classification
+8. 包含"生图"、"图像"、"画" → gpt_image_gen
+9. 如果步骤需要"分析"、"总结"、"生成报告"但不涉及具体工具 → 回答"llm"
+10. 完全不确定 → 回答"llm"
 
-      const messages: OllamaChatMessage[] = [
-        { role: 'user', content: prompt }
-      ];
+只回答工具ID（如calculator）或"llm"，不要其他内容。`;
 
-      let response = '';
-      const stream = streamOllamaChat(messages);
-      for await (const chunk of stream) {
-        response += chunk;
+      const response = await this.callLLM(prompt, 500);
+      const actionId = response.trim().toLowerCase();
+      
+      console.log('🎯 LLM选择结果:', actionId);
+      
+      // 如果是llm，返回null让后续用LLM处理
+      if (actionId === 'llm' || actionId === 'unknown' || actionId === '0') {
+        console.log('📝 将使用LLM直接处理此步骤');
+        return null;
       }
-
-      const actionId = response.trim();
-      const actionMap: Record<string, string> = {
-        '1': '8', '2': '9', '3': '10', '4': '11',
-        '5': '1', '6': '2', '7': '6', '8': '7'
-      };
-
-      const realActionId = actionMap[actionId];
-      return realActionId ? getActionById(realActionId) : null;
+      
+      // 尝试获取action
+      const action = getActionById(actionId);
+      if (action) {
+        console.log('✅ 成功匹配Action:', action.name, `(${action.id})`);
+        return action;
+      }
+      
+      console.log('⚠️ 未找到匹配的Action，将使用LLM处理');
+      return null;
 
     } catch (error) {
-      console.error('LLM动作选择失败:', error);
+      console.error('❌ LLM动作选择失败:', error);
       return null;
     }
   }
@@ -701,7 +709,7 @@ export class TodoExecutor {
   // 执行代码动作
   private async executeCodeAction(
     step: SimpleTodoItem, 
-    action: ActionItem, 
+    action: ActionDefinition, 
     startTime: number
   ): Promise<TodoStepResult> {
     // 使用LLM提取执行参数
@@ -724,7 +732,7 @@ export class TodoExecutor {
   // 执行API动作
   private async executeApiAction(
     step: SimpleTodoItem, 
-    action: ActionItem, 
+    action: ActionDefinition, 
     startTime: number
   ): Promise<TodoStepResult> {
     // 模拟API调用（实际项目中需要真实的API调用）
@@ -752,36 +760,80 @@ export class TodoExecutor {
   // 执行提示工程动作
   private async executePromptAction(
     step: SimpleTodoItem, 
-    action: ActionItem, 
+    action: ActionDefinition, 
     startTime: number
   ): Promise<TodoStepResult> {
     try {
+      // 智能提取参数
+      const params = await this.extractExecutionParams(step.text, action);
+      const inputText = params.input;
+      
       // 构建提示词
       let prompt = '';
-      if (action.name === '用户评论情感分析') {
-        prompt = `请分析以下文本的情感倾向，回答"正面"、"负面"或"中性"：\n\n"${step.text}"`;
-      } else if (action.name === '游戏标签分类') {
-        prompt = `请为以下游戏描述分类游戏类型标签：\n\n"${step.text}"`;
+      if (action.id === 'sentiment_analysis') {
+        prompt = `请分析以下文本的情感倾向，回答"正面"、"负面"或"中性"：\n\n"${inputText}"`;
+      } else if (action.id === 'game_classification') {
+        prompt = `请为以下游戏描述分类游戏类型标签（如动作、RPG、策略等）：\n\n"${inputText}"`;
       } else {
-        prompt = `请处理以下任务：${step.text}`;
+        prompt = `请处理以下任务：${inputText}`;
       }
 
       // 调用LLM
-      const messages: OllamaChatMessage[] = [
-        { role: 'user', content: prompt }
-      ];
-
-      let response = '';
-      const stream = streamOllamaChat(messages);
-      for await (const chunk of stream) {
-        response += chunk;
-      }
+      const response = await this.callLLM(prompt, 2000);
 
       const executionResult: ActionExecutionResult = {
         success: true,
         result: {
           prompt: prompt,
           response: response.trim(),
+          action: action.name,
+          input: inputText
+        },
+        executionTime: Date.now() - startTime
+      };
+
+      return {
+        success: true,
+        stepId: step.id,
+        stepText: step.text,
+        actionUsed: action,
+        executionResult,
+        executionTime: Date.now() - startTime
+      };
+
+    } catch (error) {
+      return {
+        success: false,
+        stepId: step.id,
+        stepText: step.text,
+        actionUsed: action,
+        error: (error as Error).message,
+        executionTime: Date.now() - startTime
+      };
+    }
+  }
+
+  // 🆕 执行图像生成动作
+  private async executeImageGenerationAction(
+    step: SimpleTodoItem,
+    action: ActionDefinition,
+    startTime: number
+  ): Promise<TodoStepResult> {
+    try {
+      console.log('🎨 执行图像生成任务...');
+      
+      // 智能提取图像描述prompt
+      const params = await this.extractExecutionParams(step.text, action);
+      const imagePrompt = params.input;
+      
+      console.log('🖼️ 图像生成prompt:', imagePrompt);
+
+      // 模拟图像生成（实际应该调用后端API）
+      const executionResult: ActionExecutionResult = {
+        success: true,
+        result: {
+          prompt: imagePrompt,
+          message: '图像生成功能需要在实际环境中调用GPT Image API',
           action: action.name
         },
         executionTime: Date.now() - startTime
@@ -811,34 +863,80 @@ export class TodoExecutor {
   // 使用LLM执行（当没有匹配的动作时）
   private async executeWithLLM(step: SimpleTodoItem, startTime: number): Promise<TodoStepResult> {
     try {
-      // 先尝试搜索知识库
-      const knowledgeResults = await searchKnowledgeBase(step.text, 3);
+      console.log('📝 使用LLM处理步骤:', step.text);
       
-      let context = '';
+      // 🆕 构建前置结果上下文（完整的数据传递）
+      let previousContext = '';
+      if (this.results.length > 0) {
+        previousContext = '\n\n【前置步骤的执行结果】\n';
+        this.results.forEach((r, i) => {
+          const resultData = r.executionResult?.result;
+          previousContext += `\n步骤${i + 1}: ${r.stepText}\n`;
+          
+          if (resultData) {
+            if (typeof resultData === 'object') {
+              // 提取关键字段
+              if ('result' in resultData) {
+                previousContext += `结果: ${resultData.result}\n`;
+              } else if ('response' in resultData) {
+                previousContext += `结果: ${resultData.response}\n`;
+              } else if ('answer' in resultData) {
+                previousContext += `结果: ${resultData.answer}\n`;
+              } else if ('data' in resultData) {
+                previousContext += `结果: ${JSON.stringify(resultData.data)}\n`;
+              } else {
+                previousContext += `结果: ${JSON.stringify(resultData)}\n`;
+              }
+            } else {
+              previousContext += `结果: ${resultData}\n`;
+            }
+          }
+        });
+      }
+      
+      // 🆕 构建用户输入上下文
+      const userContext = this.userOriginalInput ? 
+        `\n\n【用户的原始请求】\n${this.userOriginalInput}` : '';
+      
+      // 搜索知识库
+      const knowledgeResults = await searchKnowledgeBase(step.text, 3);
+      let knowledgeContext = '';
       if (knowledgeResults.length > 0) {
-        context = '\n\n相关知识库信息：\n' + 
+        knowledgeContext = '\n\n【相关知识库信息】\n' + 
           knowledgeResults.map(r => `- ${r.content}`).join('\n');
       }
 
-      const prompt = `请帮我完成以下任务：${step.text}${context}`;
-      
-      const messages: OllamaChatMessage[] = [
-        { role: 'user', content: prompt }
-      ];
+      // 🆕 构建完整的增强提示词
+      const prompt = `你是一个智能助手，正在执行多步骤任务的其中一步。
 
-      let response = '';
-      const stream = streamOllamaChat(messages);
-      for await (const chunk of stream) {
-        response += chunk;
-      }
+【当前任务】
+${step.text}${userContext}${previousContext}${knowledgeContext}
+
+【重要提示】
+1. 如果前置步骤提供了数据，请务必使用这些真实数据
+2. 如果用户原始请求包含了所需信息，请从中提取
+3. 不要编造或假设数据，只使用已提供的真实信息
+4. 如果需要提取信息，请从用户原始请求或前置步骤结果中提取
+5. 如果是生成报告/总结，请基于前置步骤的真实结果
+6. 【格式要求】使用纯文本和自然语言回答，不要使用LaTeX格式（如\\times、\\frac、\\approx等）
+7. 【格式要求】数学符号使用：乘号用×或*，除号用÷或/，约等于用≈，分数直接写如"1232÷890"
+8. 【格式要求】如果提取数学表达式，保持原样，不要修改运算符
+
+请完成当前任务：`;
+      
+      console.log('📋 LLM提示词长度:', prompt.length);
+      
+      const response = await this.callLLM(prompt, 2000);
 
       const executionResult: ActionExecutionResult = {
         success: true,
         result: {
           task: step.text,
           response: response.trim(),
-          method: 'LLM直接处理',
-          knowledgeUsed: knowledgeResults.length > 0
+          method: 'LLM智能处理',
+          knowledgeUsed: knowledgeResults.length > 0,
+          usedPreviousResults: this.results.length > 0,
+          usedUserInput: !!this.userOriginalInput
         },
         executionTime: Date.now() - startTime
       };
@@ -852,6 +950,7 @@ export class TodoExecutor {
       };
 
     } catch (error) {
+      console.error('❌ LLM执行失败:', error);
       return {
         success: false,
         stepId: step.id,
@@ -862,43 +961,81 @@ export class TodoExecutor {
     }
   }
 
-  // 提取执行参数
-  private async extractExecutionParams(stepText: string, action: ActionItem): Promise<{ input: string; params?: any }> {
+  // 提取执行参数（智能版，支持从前置结果和用户输入中提取）
+  private async extractExecutionParams(stepText: string, action: ActionDefinition): Promise<{ input: string; params?: any }> {
     try {
-      const prompt = `
-任务: ${stepText}
-动作: ${action.name}
-
-请从任务描述中提取执行参数。
-
-如果是数学计算，请提取数学表达式。
-如果是文本处理，请提取要处理的文本内容。
-如果是JSON处理，请提取JSON数据。
-如果是日期时间，请提取时间相关信息。
-
-只回答提取的参数内容，不要其他解释。
-`;
-
-      const messages: OllamaChatMessage[] = [
-        { role: 'user', content: prompt }
-      ];
-
-      let response = '';
-      const stream = streamOllamaChat(messages);
-      for await (const chunk of stream) {
-        response += chunk;
+      console.log('🔍 智能提取参数...', { action: action.name, step: stepText });
+      
+      // 构建前置结果上下文
+      let previousContext = '';
+      if (this.results.length > 0) {
+        previousContext = '\n\n【前置步骤结果】\n' + this.results.map((r, i) => {
+          const resultData = r.executionResult?.result;
+          let resultSummary = '';
+          
+          if (resultData) {
+            if (typeof resultData === 'object') {
+              // 提取关键字段
+              if ('result' in resultData) resultSummary = String(resultData.result);
+              else if ('response' in resultData) resultSummary = String(resultData.response);
+              else if ('data' in resultData) resultSummary = String(resultData.data);
+              else resultSummary = JSON.stringify(resultData).substring(0, 200);
+            } else {
+              resultSummary = String(resultData).substring(0, 200);
+            }
+          }
+          
+          return `步骤${i + 1}: ${r.stepText}\n结果: ${resultSummary}`;
+        }).join('\n\n');
       }
+      
+      // 构建用户输入上下文
+      const userContext = this.userOriginalInput ? `\n\n【用户原始输入】\n${this.userOriginalInput}` : '';
+      
+      const prompt = `你是参数提取专家。请从以下信息中提取工具所需的参数。
 
-      return {
-        input: response.trim() || stepText,
-        params: {}
-      };
+【当前任务】: ${stepText}
+【使用工具】: ${action.name} (${action.id})${previousContext}${userContext}
+
+【参数提取规则】
+- calculator: 提取纯数学表达式（如 "8*8*9*123+567-1232/890"）
+- text_processor: 提取要处理的文本内容
+- json_processor: 提取JSON字符串
+- datetime_processor: 提取时间信息或"now"表示当前时间
+- google_search: 提取搜索关键词
+- sentiment_analysis: 提取要分析的评论文本
+- game_classification: 提取游戏描述文本
+- gpt_image_gen: 提取图像描述prompt
+
+【重要提示】
+1. 优先从用户原始输入中提取
+2. 如果用户输入中没有，再从前置步骤结果中提取
+3. 只返回参数值本身，不要解释
+
+请以JSON格式回答：
+{
+  "value": "提取的参数值"
+}`;
+
+      const response = await this.callLLM(prompt, 1000);
+      
+      // 尝试解析JSON
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        const value = parsed.value || stepText;
+        console.log('✅ 参数提取成功:', value);
+        return { input: value, params: {} };
+      }
+      
+      // 如果无法解析JSON，直接使用响应
+      const trimmed = response.trim();
+      console.log('⚠️ JSON解析失败，使用原始响应:', trimmed);
+      return { input: trimmed || stepText, params: {} };
 
     } catch (error) {
-      return {
-        input: stepText,
-        params: {}
-      };
+      console.error('❌ 参数提取失败:', error);
+      return { input: stepText, params: {} };
     }
   }
 }
@@ -907,7 +1044,8 @@ export class TodoExecutor {
 export function createTodoExecutor(
   todoList: SimpleTodoList,
   onProgress: (result: TodoStepResult) => void,
-  onComplete: (allResults: TodoStepResult[]) => void
+  onComplete: (allResults: TodoStepResult[]) => void,
+  userInput?: string  // 🆕 用户原始输入
 ): TodoExecutor {
-  return new TodoExecutor(todoList, onProgress, onComplete);
+  return new TodoExecutor(todoList, onProgress, onComplete, userInput);
 }
